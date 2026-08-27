@@ -10,7 +10,7 @@ COMP_REPO = "/kaggle/input/competitions/arc-prize-2026-arc-agi-3/ARC-AGI-3-Agent
 MODULES = [
     "__init__.py", "agent.py", "causal_model.py", "hud.py",
     "instrumentation.py", "novelty.py", "perception.py", "policy.py",
-    "transfer.py", "planning.py", "llm.py",
+    "transfer.py", "planning.py", "navigate.py", "llm.py",
 ]
 
 # Caminho do dataset de pesos do LLM no Kaggle. O usuário anexa o dataset ao
