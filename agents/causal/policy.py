@@ -68,24 +68,29 @@ class Policy:
         self._rng = random.Random(seed)
         self.epsilon = epsilon
 
-    def score(self, cand, model, seen_effects, budget_frac) -> float:
+    def score(self, cand, model, seen_effects, budget_frac, novelty=None) -> float:
         eff, conf = model.predict(cand.key)
         s = 0.0
         if model.is_progress(cand.key):
             s += 10.0 * (1 + (1 - budget_frac))
-        if eff is None:
-            s += 3.0
-        elif conf < 0.8:
-            s += 1.5
-        if eff is not None and eff.kind not in seen_effects:
-            s += 0.5
+        if novelty is None:
+            if eff is None:
+                s += 3.0
+            elif conf < 0.8:
+                s += 1.5
+            if eff is not None and eff.kind not in seen_effects:
+                s += 0.5
+        else:
+            y = novelty.yield_estimate(cand.key)
+            ctrl = conf if eff is not None else 1.0
+            s += 3.0 * y * ctrl
         if eff is not None and eff.kind == "none":
             s -= 2.0
         if cand.has_object:
             s += 0.5
         return s
 
-    def decide(self, scene, model, available_actions, seen_effects, budget_frac):
+    def decide(self, scene, model, available_actions, seen_effects, budget_frac, novelty=None):
         cands = candidates(scene, available_actions)
         if not cands:
             return None
@@ -93,7 +98,7 @@ class Policy:
             return self._rng.choice(cands)
         best, best_s = None, None
         for c in cands:
-            sc = self.score(c, model, seen_effects, budget_frac)
+            sc = self.score(c, model, seen_effects, budget_frac, novelty=novelty)
             if best_s is None or sc > best_s:
                 best, best_s = c, sc
         return best
