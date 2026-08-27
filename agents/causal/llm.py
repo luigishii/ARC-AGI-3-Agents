@@ -26,6 +26,59 @@ class NullLLMClient(LLMClient):
         return ""
 
 
+class VLLMClient(LLMClient):
+    """Serving via vLLM (primário). Import lazy — llm.py fica offline-safe."""
+
+    def __init__(self, model_path, max_tokens: int = 256):
+        from vllm import LLM, SamplingParams  # lazy
+        self._llm = LLM(model=model_path, dtype="float16",
+                        gpu_memory_utilization=0.9)
+        self._sp = SamplingParams(temperature=0.2, max_tokens=max_tokens)
+
+    def complete(self, prompt: str) -> str:
+        out = self._llm.generate([prompt], self._sp)
+        return out[0].outputs[0].text
+
+
+class HFClient(LLMClient):
+    """Fallback: transformers + bitsandbytes (4-bit). Import lazy."""
+
+    def __init__(self, model_path, max_tokens: int = 256):
+        import torch
+        from transformers import (AutoModelForCausalLM, AutoTokenizer,
+                                   BitsAndBytesConfig)  # lazy
+        self._tok = AutoTokenizer.from_pretrained(model_path)
+        bnb = BitsAndBytesConfig(load_in_4bit=True,
+                                 bnb_4bit_compute_dtype=torch.float16)
+        self._model = AutoModelForCausalLM.from_pretrained(
+            model_path, quantization_config=bnb, device_map="auto")
+        self._max = max_tokens
+
+    def complete(self, prompt: str) -> str:
+        import torch
+        ids = self._tok.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True, return_tensors="pt").to(self._model.device)
+        with torch.no_grad():
+            out = self._model.generate(ids, max_new_tokens=self._max,
+                                       do_sample=False)
+        return self._tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)
+
+
+def make_llm_client(model_path=None) -> LLMClient:
+    """vLLM → transformers+4bit → NullLLMClient. Nunca levanta."""
+    if model_path:
+        try:
+            return VLLMClient(model_path)
+        except Exception:
+            pass
+        try:
+            return HFClient(model_path)
+        except Exception:
+            pass
+    return NullLLMClient()
+
+
 def build_prompt(scene, dynamics) -> str:
     dyn = dynamics or {}
     lines = [f"OBJECTS ({len(scene.objects)}):"]
