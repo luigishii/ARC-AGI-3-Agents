@@ -18,10 +18,21 @@ from .navigate import MovementModel, navigate
 from .perception_strategy import PerceptionStrategy
 from .llm import make_llm_client, build_prompt, parse_goal, execute_goal
 from .ranker import rank_candidates
+from .ontology import LocalEffectTable, effect_signature
+from .typed_model import TypedWorldModel, accept_rule
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
 GOAL_AGE_MAX = 20
+TYPE_MIN_OBS = 3          # transições mínimas p/ tentar sintetizar f_τ
+TYPE_BUF_MAX = 64         # transições guardadas por tipo
+TYPE_COOLDOWN = 8         # cadência esparsa da síntese de regra de tipo
+
+
+def _obj_state(o) -> dict:
+    """Estado mecânico serializável de um objeto p/ as regras f_τ (x=col, y=row)."""
+    return {"x": int(round(o.centroid[1])), "y": int(round(o.centroid[0])),
+            "color": int(o.color), "shape": o.shape_hash}
 
 
 class CausalObjectAgent(Agent):
@@ -64,6 +75,13 @@ class CausalObjectAgent(Agent):
         self._hud = HudMask()
         self._prev_grid = None
         self._percept = PerceptionStrategy()
+        # Fase-2: exploração por erro de ontologia (η) + world-model fatorado por tipo (f_τ)
+        self._etable = LocalEffectTable()
+        self._type_buffer = {}          # τ -> [transição {before,action,context,after}]
+        self._typed = TypedWorldModel()
+        self._eta_on = os.environ.get("CAUSAL_ETA", "0") != "0"
+        self._typed_on = os.environ.get("CAUSAL_TYPED", "0") != "0"
+        self._since_type = 0
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -101,6 +119,8 @@ class CausalObjectAgent(Agent):
             self._seen_effects.add(actual.kind)
             # transition_buffer p/ retrodição: (cena_t, ação_tomada, efeito_kind)
             self._buffer.append((self._prev_scene, self._last_key, actual.kind))
+            # Fase-2: assinaturas de efeito por tipo (η) + transições por tipo (f_τ)
+            self._observe_types(self._prev_scene, scene, self._last_key)
             if level_up:
                 self._novelty.record_goal_anchor(state_signature(self._prev_scene))
                 self._goal = None                     # nível cumprido → re-planejar
@@ -145,6 +165,13 @@ class CausalObjectAgent(Agent):
                 self._goal = goals[0] if goals else None
             self._goal_age = 0
             self._since_query = 0
+        # (1b) síntese esparsa de regra de tipo f_τ via LLM, validada por accept_rule
+        self._since_type += 1
+        if self._typed_on and self._llm_on and self._since_type >= TYPE_COOLDOWN:
+            tau = self._pick_type_to_learn()
+            if tau is not None:
+                self._try_learn_type_rule(tau)
+                self._since_type = 0
         cand = None
         # (2) meta do LLM com validação
         if self._goal is not None:
@@ -167,6 +194,10 @@ class CausalObjectAgent(Agent):
                            self._tmodel, self._novelty, self._novelty.goal_anchors)
             if planned is not None:
                 cand = keymap.get(planned)
+        if cand is None and self._eta_on and cands:
+            ek = self._eta_explore(cands)     # sonda a ação de linha mais ambígua (η alto)
+            if ek is not None:
+                cand = keymap.get(ek)
         if cand is None:
             cand = self._policy.decide(
                 scene, self._model, avail,
@@ -208,3 +239,76 @@ class CausalObjectAgent(Agent):
         self._last_predicted = predicted
         self._last_level = latest_frame.levels_completed or 0
         return action
+
+    # --- Fase-2: exploração por η + world-model fatorado por tipo (f_τ) ---
+    def _observe_types(self, prev_scene, scene, key) -> None:
+        """Arquiva, por objeto pareado (id), a assinatura de efeito (η) e a transição
+        mecânica (before→after) sob o tipo τ = shape_hash do objeto."""
+        prev_by_id = {o.id: o for o in prev_scene.objects}
+        for o in scene.objects:
+            po = prev_by_id.get(o.id)
+            if po is None:
+                continue
+            tau = po.shape_hash
+            self._etable.observe(tau, key, "", effect_signature(po, o))
+            buf = self._type_buffer.setdefault(tau, [])
+            buf.append({"before": _obj_state(po), "action": key,
+                        "context": {}, "after": _obj_state(o)})
+            if len(buf) > TYPE_BUF_MAX:
+                buf.pop(0)
+
+    def _eta_bonus(self, key) -> float:
+        # η = ontology_error(0, effect_entropy) = incerteza de efeito da linha (τ,key).
+        # (type_entropy=0 até existir um classificador de tipos — só then η fica completo.)
+        best = 0.0
+        for j in self._etable.rows:
+            if j[1] == key:
+                best = max(best, self._etable.row_entropy(j))
+        return best
+
+    def _eta_explore(self, cands):
+        best_key, best_eta = None, 0.0
+        for c in cands:
+            e = self._eta_bonus(c.key)
+            if e > best_eta:
+                best_eta, best_key = e, c.key
+        return best_key
+
+    def _pick_type_to_learn(self):
+        """Tipo mais DETERMINÍSTICO (menor η) com dados suficientes e sem regra aceita —
+        é o que o Qwen consegue modelar; η alto fica p/ sondagem/exploração."""
+        best, best_eta = None, None
+        for tau, buf in self._type_buffer.items():
+            if tau in self._typed.sources or len(buf) < TYPE_MIN_OBS:
+                continue
+            eta = max((self._etable.row_entropy(j) for j in self._etable.rows
+                       if j[0] == tau), default=0.0)
+            if best_eta is None or eta < best_eta:
+                best_eta, best = eta, tau
+        return best
+
+    def _build_type_prompt(self, tau, transitions) -> str:
+        lines = [f"Tipo {tau}: infira transition(obj, action, ctx) que reproduz exatamente:"]
+        for t in transitions[:8]:
+            lines.append(f"  {t['before']} --{t['action']}--> {t['after']}")
+        lines.append('Responda JSON {"type":"code","source":"def transition(obj, action, ctx): ..."}')
+        return "\n".join(lines)
+
+    def _try_learn_type_rule(self, tau) -> bool:
+        """Consulta o LLM por f_τ e ACEITA a 1ª regra que passa o replay exato das
+        transições daquele tipo (accept_rule). Plug do Qwen na validação fatorada."""
+        buf = self._type_buffer.get(tau, [])
+        if tau in self._typed.sources or len(buf) < TYPE_MIN_OBS:
+            return False
+        prompt = self._build_type_prompt(tau, buf)
+        if self._n_samples > 1:
+            resps = self._llm.complete_many(prompt, self._n_samples)
+        else:
+            resps = [self._llm.complete(prompt)]
+        for r in resps:
+            g = parse_goal(r)
+            src = g.get("source") if g and g.get("type") == "code" else None
+            if src and accept_rule(src, buf):
+                self._typed.set_rule(tau, src)
+                return True
+        return False
