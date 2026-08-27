@@ -7,8 +7,9 @@ from agents.agent import Agent
 
 from .causal_model import CausalModel
 from .instrumentation import Instrumentation
-from .perception import match_objects, parse
+from .perception import match_objects, parse, to_grid
 from .policy import Policy
+from .hud import HudMask
 
 
 class CausalObjectAgent(Agent):
@@ -30,6 +31,8 @@ class CausalObjectAgent(Agent):
         self._last_level = 0
         self._seen_effects = set()
         self._pending_log = None
+        self._hud = HudMask()
+        self._prev_grid = None
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -43,9 +46,14 @@ class CausalObjectAgent(Agent):
             self._prev_scene = None
             self._last_key = None
             self._pending_log = None
+            self._hud = HudMask()
+            self._prev_grid = None
             return GameAction.RESET
 
-        scene = match_objects(self._prev_scene, parse(latest_frame.frame))
+        grid = to_grid(latest_frame.frame)
+        if self._prev_grid is not None:
+            self._hud.update(self._prev_grid, grid)
+        scene = match_objects(self._prev_scene, parse(latest_frame.frame, hud_mask=self._hud.mask()))
 
         # fecha o loop causal da ação anterior
         if self._prev_scene is not None and self._last_key is not None:
@@ -93,6 +101,7 @@ class CausalObjectAgent(Agent):
 
         # guarda estado p/ o próximo passo
         self._prev_scene = scene
+        self._prev_grid = grid
         self._last_key = cand.key
         self._last_predicted = predicted
         self._last_level = latest_frame.levels_completed or 0

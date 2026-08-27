@@ -21,6 +21,8 @@ def compute_effect(prev, curr) -> Effect:
                 changes.append(Effect("moved", (dr, dc)))
             elif co.color != po.color:
                 changes.append(Effect("recolored", (po.color, co.color)))
+            elif co.cells != po.cells:
+                changes.append(Effect("morphed", (po.size, co.size)))
     for oid, co in curr_by_id.items():
         if oid not in prev_by_id:
             changes.append(Effect("appeared", oid))

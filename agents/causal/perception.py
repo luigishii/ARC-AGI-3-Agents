@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 _id_counter = itertools.count(1)
+IOU_THRESHOLD = 0.3
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,11 @@ def _shape_hash(cells: frozenset) -> str:
     return hashlib.md5(str(norm).encode()).hexdigest()[:8]
 
 
-def parse(frame) -> Scene:
+def to_grid(frame) -> np.ndarray:
+    return _to_grid(frame)
+
+
+def parse(frame, hud_mask=None) -> Scene:
     grid = _to_grid(frame)
     bg = _background_color(grid)
     seen = np.zeros(grid.shape, dtype=bool)
@@ -55,7 +60,8 @@ def parse(frame) -> Scene:
     rows, cols = grid.shape
     for r in range(rows):
         for c in range(cols):
-            if seen[r, c] or grid[r, c] == bg:
+            masked = hud_mask is not None and hud_mask[r, c]
+            if seen[r, c] or grid[r, c] == bg or masked:
                 continue
             color = int(grid[r, c])
             cells = []
@@ -66,7 +72,10 @@ def parse(frame) -> Scene:
                 cells.append((cr, cc))
                 for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     nr, nc = cr + dr, cc + dc
-                    if 0 <= nr < rows and 0 <= nc < cols and not seen[nr, nc] and grid[nr, nc] == color:
+                    if not (0 <= nr < rows and 0 <= nc < cols):
+                        continue
+                    nmasked = hud_mask is not None and hud_mask[nr, nc]
+                    if not seen[nr, nc] and grid[nr, nc] == color and not nmasked:
                         seen[nr, nc] = True
                         q.append((nr, nc))
             cset = frozenset(cells)
@@ -80,37 +89,49 @@ def parse(frame) -> Scene:
     return Scene(objects=objects, grid=grid)
 
 
+def _iou(a, b) -> float:
+    if not a and not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
 def match_objects(prev: Scene | None, curr: Scene) -> Scene:
     prev_objs = list(prev.objects) if prev is not None else []
     used = set()
     matched = {}  # indice em curr.objects -> id do prev
 
-    def _best(o, require_color):
+    # tier 1: exato cor + shape_hash + centroide mais proximo
+    for i, o in enumerate(curr.objects):
         best, best_d = None, None
         for p in prev_objs:
-            if p.id in used or p.shape_hash != o.shape_hash:
-                continue
-            if require_color and p.color != o.color:
+            if p.id in used or p.shape_hash != o.shape_hash or p.color != o.color:
                 continue
             d = (p.centroid[0] - o.centroid[0]) ** 2 + (p.centroid[1] - o.centroid[1]) ** 2
             if best_d is None or d < best_d:
                 best, best_d = p, d
-        return best, best_d
-
-    # passe 1: match estrito por cor + shape + centroide mais proximo
-    for i, o in enumerate(curr.objects):
-        best, _ = _best(o, True)
         if best is not None:
             used.add(best.id)
             matched[i] = best.id
-    # passe 2: fallback ignorando cor (recolor), so quando muito proximo
-    for i, o in enumerate(curr.objects):
-        if i in matched:
-            continue
-        best, best_d = _best(o, False)
-        if best is not None and best_d is not None and best_d <= 2.0:
-            used.add(best.id)
-            matched[i] = best.id
+
+    # tier 2: IoU mesma cor  /  tier 3: IoU qualquer cor
+    for require_color in (True, False):
+        for i, o in enumerate(curr.objects):
+            if i in matched:
+                continue
+            best, best_iou = None, None
+            for p in prev_objs:
+                if p.id in used:
+                    continue
+                if require_color and p.color != o.color:
+                    continue
+                iou = _iou(p.cells, o.cells)
+                if iou >= IOU_THRESHOLD and (best_iou is None or iou > best_iou):
+                    best, best_iou = p, iou
+            if best is not None:
+                used.add(best.id)
+                matched[i] = best.id
 
     new_objs = []
     for i, o in enumerate(curr.objects):
