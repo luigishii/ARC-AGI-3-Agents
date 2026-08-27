@@ -24,6 +24,7 @@ class CausalObjectAgent(Agent):
         self._init_causal_state()
 
     def _init_causal_state(self) -> None:
+        self.MAX_ACTIONS = int(os.environ.get("CAUSAL_MAX_ACTIONS", type(self).MAX_ACTIONS))
         self._model = CausalModel()
         self._novelty = NoveltyModel()
         self._prior = shared_prior()
