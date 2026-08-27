@@ -25,3 +25,15 @@ def test_complex_action_candidate_per_object():
     coords = sorted((c.x, c.y) for c in cands)
     assert coords == [(1, 1), (4, 4)]        # (col,row) dos centroides
     assert all("@color=" in c.key for c in cands)
+
+
+def test_complex_action_no_objects_fallback():
+    # Cena vazia (sem objetos): ação complexa deve gerar 1 candidato de
+    # fallback no centro da grade, ao invés de 0 candidatos (que quebraria
+    # decide()/o agente se essa fosse a única ação disponível).
+    empty_g = np.zeros((6, 6), dtype=int)
+    empty_scene = match_objects(None, parse(empty_g.tolist()))
+    cands = candidates(empty_scene, [GameAction.ACTION6])
+    assert len(cands) == 1
+    assert cands[0].x == 32 and cands[0].y == 32
+    assert cands[0].key.endswith("@empty")
