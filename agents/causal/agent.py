@@ -15,6 +15,7 @@ from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_
 from .planning import TransitionModel, plan
 from .navigate import MovementModel, navigate
 from .llm import make_llm_client, build_prompt, parse_goal, execute_goal
+from .ranker import rank_candidates
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
@@ -39,6 +40,7 @@ class CausalObjectAgent(Agent):
         self._nav_on = os.environ.get("CAUSAL_NAV", "1") != "0"
         self._llm = make_llm_client(os.environ.get("QWEN_MODEL_PATH"))
         self._llm_on = os.environ.get("CAUSAL_LLM", "0") != "0"
+        self._n_samples = int(os.environ.get("CAUSAL_SAMPLES", "1"))
         self._goal = None
         self._goal_age = 0
         self._goal_fails = 0
@@ -119,7 +121,20 @@ class CausalObjectAgent(Agent):
         self._since_query += 1
         if self._llm_on and self._goal is None and self._since_query >= QUERY_COOLDOWN:
             dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
-            self._goal = parse_goal(self._llm.complete(build_prompt(scene, dyn)))
+            prompt = build_prompt(scene, dyn)
+            if self._n_samples > 1:
+                resps = self._llm.complete_many(prompt, self._n_samples)
+            else:
+                resps = [self._llm.complete(prompt)]
+            goals = [g for g in (parse_goal(r) for r in resps) if g is not None]
+            code_srcs = [g["source"] for g in goals if g.get("type") == "code"]
+            if code_srcs:
+                best = rank_candidates(code_srcs, scene, self._model,
+                                       self._tmodel, self._novelty, moves)
+                self._goal = ({"type": "code", "source": best} if best
+                              else (goals[0] if goals else None))
+            else:
+                self._goal = goals[0] if goals else None
             self._goal_age = 0
             self._since_query = 0
         cand = None
