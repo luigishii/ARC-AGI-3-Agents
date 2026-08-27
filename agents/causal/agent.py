@@ -11,7 +11,7 @@ from .perception import match_objects, parse, to_grid
 from .policy import Policy
 from .hud import HudMask
 from .novelty import NoveltyModel, state_signature
-from .transfer import shared_prior, abstract_feature
+from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_PRIOR_PATH
 
 
 class CausalObjectAgent(Agent):
@@ -27,6 +27,7 @@ class CausalObjectAgent(Agent):
         self._model = CausalModel()
         self._novelty = NoveltyModel()
         self._prior = shared_prior()
+        load_shared_once(os.environ.get("CAUSAL_PRIOR", DEFAULT_PRIOR_PATH))
         self._last_feature = None
         self._policy = Policy(seed=0, epsilon=0.05)
         self._instr = Instrumentation(path=os.environ.get("CAUSAL_LOG"))
@@ -41,6 +42,12 @@ class CausalObjectAgent(Agent):
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
+
+    def cleanup(self, scorecard=None):
+        if os.environ.get("CAUSAL_PRIOR_SAVE"):
+            from .transfer import save_prior
+            save_prior(self._prior, os.environ.get("CAUSAL_PRIOR", DEFAULT_PRIOR_PATH))
+        super().cleanup(scorecard)
 
     def choose_action(
         self, frames: list[FrameData], latest_frame: FrameData
