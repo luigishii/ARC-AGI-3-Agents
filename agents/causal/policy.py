@@ -6,7 +6,7 @@ from collections import namedtuple
 
 from arcengine import GameAction
 
-Candidate = namedtuple("Candidate", "action x y key")
+Candidate = namedtuple("Candidate", "action x y key has_object")
 
 GRID_N = 6
 
@@ -28,12 +28,13 @@ def _as_action(a):
     return a if isinstance(a, GameAction) else GameAction.from_id(a)
 
 
-def action_key(action, target_obj) -> str:
+def action_key(action, cell=None) -> str:
     if not action.is_complex():
         return action.name
-    if target_obj is None:
+    if cell is None:
         return f"{action.name}@empty"
-    return f"{action.name}@color={target_obj.color},size={target_obj.size}"
+    gx, gy = cell
+    return f"{action.name}@cell={gx},{gy}"
 
 
 def candidates(scene, available_actions) -> list:
