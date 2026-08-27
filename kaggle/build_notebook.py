@@ -11,7 +11,7 @@ MODULES = [
     "__init__.py", "agent.py", "causal_model.py", "hud.py",
     "instrumentation.py", "novelty.py", "perception.py", "perception_strategy.py", "policy.py",
     "transfer.py", "planning.py", "navigate.py", "llm.py", "sandbox.py", "dsl.py", "ranker.py",
-    "ontology.py", "typed_model.py", "iw.py",
+    "ontology.py", "typed_model.py", "iw.py", "goals.py",
 ]
 
 # Caminho do dataset de pesos do LLM no Kaggle. O usuário anexa o dataset ao
