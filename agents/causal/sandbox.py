@@ -16,10 +16,12 @@ SAFE_BUILTINS = {n: (__builtins__[n] if isinstance(__builtins__, dict)
 SAFE_BUILTINS["print"] = lambda *a, **k: None      # print no-op
 
 
-def compile_decide(source):
+def compile_decide(source, extra=None):
     if not source or "decide" not in source:
         return None
     g = {"__builtins__": SAFE_BUILTINS}
+    if extra:
+        g.update(extra)
     try:
         exec(source, g)
     except Exception:
@@ -47,8 +49,8 @@ def run_decide(fn, scene, timeout: float = 0.5):
     return box["val"]
 
 
-def execute_code_goal(source, scene, timeout: float = 0.5):
-    fn = compile_decide(source)
+def execute_code_goal(source, scene, timeout: float = 0.5, extra=None):
+    fn = compile_decide(source, extra)
     if fn is None:
         return None
     return run_decide(fn, scene, timeout)
