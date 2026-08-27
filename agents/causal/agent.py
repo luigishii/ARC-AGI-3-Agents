@@ -16,7 +16,7 @@ from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_
 from .planning import TransitionModel, plan
 from .navigate import MovementModel, navigate
 from .perception_strategy import PerceptionStrategy
-from .llm import make_llm_client, build_prompt, parse_goal, execute_goal
+from .llm import make_llm_client, build_prompt, parse_goal, execute_goal, client_kind
 from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
@@ -55,6 +55,12 @@ class CausalObjectAgent(Agent):
         self._llm = make_llm_client(os.environ.get("QWEN_MODEL_PATH"))
         self._llm_on = os.environ.get("CAUSAL_LLM", "0") != "0"
         self._n_samples = int(os.environ.get("CAUSAL_SAMPLES", "1"))
+        self._llm_kind = client_kind(self._llm)
+        self._llm_calls = 0
+        self._llm_max = int(os.environ.get("CAUSAL_LLM_MAX_CALLS", "100000"))
+        self._repair_max = int(os.environ.get("CAUSAL_REPAIR", "1"))
+        if self._llm_on:      # log de boot: 'null' = LLM não subiu (degradou p/ fallback)
+            print(f"[causal] LLM ativo: {self._llm_kind} (max_calls={self._llm_max})")
         self._goal = None
         self._goal_age = 0
         self._goal_fails = 0
@@ -148,7 +154,9 @@ class CausalObjectAgent(Agent):
         moves = self._move.moves()
         # (1) consulta esparsa ao LLM: só se ligado, sem meta ativa e passado o cooldown
         self._since_query += 1
-        if self._llm_on and self._goal is None and self._since_query >= QUERY_COOLDOWN:
+        if (self._llm_on and self._goal is None and self._since_query >= QUERY_COOLDOWN
+                and self._llm_calls < self._llm_max):
+            self._llm_calls += 1
             dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
             prompt = build_prompt(scene, dyn)
             if self._n_samples > 1:
@@ -169,7 +177,8 @@ class CausalObjectAgent(Agent):
             self._since_query = 0
         # (1b) síntese esparsa de regra de tipo f_τ via LLM, validada por accept_rule
         self._since_type += 1
-        if self._typed_on and self._llm_on and self._since_type >= TYPE_COOLDOWN:
+        if (self._typed_on and self._llm_on and self._since_type >= TYPE_COOLDOWN
+                and self._llm_calls < self._llm_max):
             tau = self._pick_type_to_learn()
             if tau is not None:
                 self._try_learn_type_rule(tau)
@@ -309,21 +318,40 @@ class CausalObjectAgent(Agent):
         lines.append('Responda JSON {"type":"code","source":"def transition(obj, action, ctx): ..."}')
         return "\n".join(lines)
 
+    def _rule_error(self, src) -> str:
+        from .typed_model import compile_rule
+        if compile_rule(src) is None:
+            return "não compila (falta 'def transition(obj, action, ctx)' ou erro de sintaxe)"
+        return "compila mas não reproduz exatamente as transições (replay mismatch)"
+
+    def _build_repair_prompt(self, tau, transitions, err) -> str:
+        base = self._build_type_prompt(tau, transitions)
+        return base + f"\nA tentativa anterior FALHOU: {err}. Corrija e responda SÓ o JSON."
+
     def _try_learn_type_rule(self, tau) -> bool:
         """Consulta o LLM por f_τ e ACEITA a 1ª regra que passa o replay exato das
-        transições daquele tipo (accept_rule). Plug do Qwen na validação fatorada."""
+        transições daquele tipo (accept_rule). Self-repair barato: se nenhuma amostra
+        passa, realimenta o erro e re-pergunta até CAUSAL_REPAIR vezes."""
         buf = self._type_buffer.get(tau, [])
         if tau in self._typed.sources or len(buf) < TYPE_MIN_OBS:
             return False
         prompt = self._build_type_prompt(tau, buf)
-        if self._n_samples > 1:
-            resps = self._llm.complete_many(prompt, self._n_samples)
-        else:
-            resps = [self._llm.complete(prompt)]
-        for r in resps:
-            g = parse_goal(r)
-            src = g.get("source") if g and g.get("type") == "code" else None
-            if src and accept_rule(src, buf):
-                self._typed.set_rule(tau, src)
-                return True
+        for _ in range(self._repair_max + 1):
+            self._llm_calls += 1
+            if self._n_samples > 1:
+                resps = self._llm.complete_many(prompt, self._n_samples)
+            else:
+                resps = [self._llm.complete(prompt)]
+            last_err = "sem resposta"
+            for r in resps:
+                g = parse_goal(r)
+                src = g.get("source") if g and g.get("type") == "code" else None
+                if not src:
+                    last_err = "resposta não é JSON de código válido"
+                    continue
+                if accept_rule(src, buf):
+                    self._typed.set_rule(tau, src)
+                    return True
+                last_err = self._rule_error(src)
+            prompt = self._build_repair_prompt(tau, buf, last_err)   # realimenta o erro
         return False
