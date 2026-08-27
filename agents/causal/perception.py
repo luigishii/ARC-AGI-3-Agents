@@ -27,6 +27,7 @@ class Object:
 class Scene:
     objects: list
     grid: np.ndarray = field(repr=False)
+    metrics: dict = None       # percepção tripla: grid+grafo(objects)+métricas globais
 
 
 def _to_grid(frame) -> np.ndarray:
@@ -50,6 +51,41 @@ def _shape_hash(cells: frozenset) -> str:
 
 def to_grid(frame) -> np.ndarray:
     return _to_grid(frame)
+
+
+def canonical_color_map(grid: np.ndarray) -> dict:
+    """Mapa cor→rank por frequência decrescente (mais comum=0). Torna a física
+    aprendida abstrata: gravidade é a mesma pro bloco azul ou amarelo."""
+    vals, counts = np.unique(grid, return_counts=True)
+    order = sorted(range(len(vals)), key=lambda i: (-counts[i], int(vals[i])))
+    return {int(vals[i]): rank for rank, i in enumerate(order)}
+
+
+def canonical_grid(grid: np.ndarray) -> np.ndarray:
+    """Grid recolorido pelos ranks de frequência (invariante à paleta absoluta)."""
+    cmap = canonical_color_map(grid)
+    out = np.empty_like(grid)
+    for orig, rank in cmap.items():
+        out[grid == orig] = rank
+    return out
+
+
+def global_metrics(grid: np.ndarray) -> dict:
+    """Métricas globais p/ a percepção tripla (grid + grafo + métricas)."""
+    vals, counts = np.unique(grid, return_counts=True)
+    color_counts = {int(v): int(c) for v, c in zip(vals, counts)}
+    bg = int(vals[counts.argmax()])
+    rarest = int(vals[counts.argmin()])
+    area = int(grid.size - color_counts[bg])          # células não-fundo
+    return {
+        "color_counts": color_counts,
+        "n_colors": len(vals),
+        "area": area,
+        "bg": bg,
+        "rarest_color": rarest,
+        "symmetry_h": bool(np.array_equal(grid, np.fliplr(grid))),
+        "symmetry_v": bool(np.array_equal(grid, np.flipud(grid))),
+    }
 
 
 def parse(frame, hud_mask=None) -> Scene:
@@ -86,7 +122,7 @@ def parse(frame, hud_mask=None) -> Scene:
             objects.append(
                 Object(color, cset, bbox, centroid, len(cells), _shape_hash(cset))
             )
-    return Scene(objects=objects, grid=grid)
+    return Scene(objects=objects, grid=grid, metrics=global_metrics(grid))
 
 
 def _iou(a, b) -> float:
@@ -139,7 +175,7 @@ def match_objects(prev: Scene | None, curr: Scene) -> Scene:
         if oid is None:
             oid = next(_id_counter)
         new_objs.append(replace(o, id=oid))
-    return Scene(objects=new_objs, grid=curr.grid)
+    return Scene(objects=new_objs, grid=curr.grid, metrics=curr.metrics)
 
 
 def object_at(scene: Scene, x: int, y: int):
