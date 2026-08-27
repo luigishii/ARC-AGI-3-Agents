@@ -8,11 +8,13 @@ GOAL_TYPES = {"press", "click_cell", "reach", "code"}
 
 _INSTRUCTION = (
     "You are playing a grid puzzle. Infer the GOAL and reply with ONLY a JSON "
-    "object, one of:\n"
+    "object — no markdown fences, no prose, no explanation — one of:\n"
     '{"type":"press","action":"ACTION1"}\n'
     '{"type":"click_cell","gx":0,"gy":0}\n'
     '{"type":"reach","avatar":<sel>,"target":<sel>}  '
-    '(sel = {"id":I} | {"color":C} | "rarest")'
+    '(sel = {"id":I} | {"color":C} | "rarest")\n'
+    '{"type":"code","source":"def decide(scene):\\n    return \'ACTION1\'"}\n'
+    'Example valid reply: {"type":"press","action":"ACTION2"}'
 )
 
 
@@ -84,6 +86,12 @@ def make_llm_client(model_path=None) -> LLMClient:
     return NullLLMClient()
 
 
+def client_kind(client) -> str:
+    """Rótulo do cliente ativo p/ diagnóstico ('null' = degradou → LLM não subiu)."""
+    return {"NullLLMClient": "null", "VLLMClient": "vllm", "HFClient": "hf"}.get(
+        type(client).__name__, type(client).__name__.lower())
+
+
 def build_prompt(scene, dynamics) -> str:
     dyn = dynamics or {}
     lines = [f"OBJECTS ({len(scene.objects)}):"]
@@ -98,16 +106,43 @@ def build_prompt(scene, dynamics) -> str:
     return "\n".join(lines)
 
 
-def parse_goal(text):
+def _extract_json(text):
+    """Extrai o 1º objeto JSON de uma resposta de LLM, tolerando cercas markdown
+    (```json ... ```) e prosa em volta. Balanceia chaves; cai p/ 1º{...último} se falhar."""
     if not text:
         return None
-    i, j = text.find("{"), text.rfind("}")
-    if i < 0 or j < i:
+    s = text.strip()
+    if "```" in s:                                   # tira cercas markdown
+        blocks = [b for b in s.split("```") if "{" in b]
+        if blocks:
+            s = max(blocks, key=len)
+            if s.lstrip()[:4].lower() == "json":
+                s = s.lstrip()[4:]
+    i = s.find("{")
+    if i < 0:
         return None
-    try:
-        g = json.loads(text[i:j + 1])
-    except Exception:
-        return None
+    depth = 0                                        # varre até fechar o 1º objeto
+    for k in range(i, len(s)):
+        if s[k] == "{":
+            depth += 1
+        elif s[k] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(s[i:k + 1])
+                except Exception:
+                    break
+    j = s.rfind("}")                                 # fallback: 1º { ... último }
+    if j > i:
+        try:
+            return json.loads(s[i:j + 1])
+        except Exception:
+            return None
+    return None
+
+
+def parse_goal(text):
+    g = _extract_json(text)
     if not isinstance(g, dict) or g.get("type") not in GOAL_TYPES:
         return None
     t = g["type"]
