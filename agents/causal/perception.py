@@ -83,21 +83,41 @@ def parse(frame) -> Scene:
 def match_objects(prev: Scene | None, curr: Scene) -> Scene:
     prev_objs = list(prev.objects) if prev is not None else []
     used = set()
-    new_objs = []
-    for o in curr.objects:
-        best = None
-        best_d = None
+    matched = {}  # indice em curr.objects -> id do prev
+
+    def _best(o, require_color):
+        best, best_d = None, None
         for p in prev_objs:
-            if p.id in used or p.color != o.color or p.shape_hash != o.shape_hash:
+            if p.id in used or p.shape_hash != o.shape_hash:
+                continue
+            if require_color and p.color != o.color:
                 continue
             d = (p.centroid[0] - o.centroid[0]) ** 2 + (p.centroid[1] - o.centroid[1]) ** 2
             if best_d is None or d < best_d:
                 best, best_d = p, d
+        return best, best_d
+
+    # passe 1: match estrito por cor + shape + centroide mais proximo
+    for i, o in enumerate(curr.objects):
+        best, _ = _best(o, True)
         if best is not None:
             used.add(best.id)
-            new_objs.append(replace(o, id=best.id))
-        else:
-            new_objs.append(replace(o, id=next(_id_counter)))
+            matched[i] = best.id
+    # passe 2: fallback ignorando cor (recolor), so quando muito proximo
+    for i, o in enumerate(curr.objects):
+        if i in matched:
+            continue
+        best, best_d = _best(o, False)
+        if best is not None and best_d is not None and best_d <= 2.0:
+            used.add(best.id)
+            matched[i] = best.id
+
+    new_objs = []
+    for i, o in enumerate(curr.objects):
+        oid = matched.get(i)
+        if oid is None:
+            oid = next(_id_counter)
+        new_objs.append(replace(o, id=oid))
     return Scene(objects=new_objs, grid=curr.grid)
 
 

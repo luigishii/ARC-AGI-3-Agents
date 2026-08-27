@@ -23,3 +23,14 @@ def test_new_object_gets_fresh_id():
     curr = match_objects(prev, parse(g.tolist()))
     ids = sorted(o.id for o in curr.objects)
     assert len(set(ids)) == 2                  # dois ids distintos
+
+
+def test_recolored_object_keeps_id():
+    import numpy as np
+    g0 = np.zeros((5, 5), dtype=int); g0[2, 2] = 3
+    prev = match_objects(None, parse(g0.tolist()))
+    id0 = prev.objects[0].id
+    g1 = np.zeros((5, 5), dtype=int); g1[2, 2] = 7   # mesma celula, cor nova
+    curr = match_objects(prev, parse(g1.tolist()))
+    assert len(curr.objects) == 1
+    assert curr.objects[0].id == id0

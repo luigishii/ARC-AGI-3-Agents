@@ -38,3 +38,19 @@ def test_structural_effect_when_many_changes():
     s0 = _scene(None, g0.tolist())
     s1 = _scene(s0, g1.tolist())
     assert compute_effect(s0, s1).kind == "structural"
+
+
+def test_recolored_effect():
+    g0 = np.zeros((6, 6), dtype=int); g0[1, 1] = 3
+    s0 = _scene(None, g0.tolist())
+    g1 = np.zeros((6, 6), dtype=int); g1[1, 1] = 7
+    s1 = _scene(s0, g1.tolist())
+    assert compute_effect(s0, s1).kind == "recolored"
+
+
+def test_appeared_effect():
+    g0 = np.zeros((6, 6), dtype=int); g0[1, 1] = 3
+    s0 = _scene(None, g0.tolist())
+    g1 = np.zeros((6, 6), dtype=int); g1[1, 1] = 3; g1[4, 4] = 5   # objeto novo
+    s1 = _scene(s0, g1.tolist())
+    assert compute_effect(s0, s1).kind == "appeared"
