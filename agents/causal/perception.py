@@ -47,7 +47,11 @@ def _shape_hash(cells: frozenset) -> str:
     return hashlib.md5(str(norm).encode()).hexdigest()[:8]
 
 
-def parse(frame) -> Scene:
+def to_grid(frame) -> np.ndarray:
+    return _to_grid(frame)
+
+
+def parse(frame, hud_mask=None) -> Scene:
     grid = _to_grid(frame)
     bg = _background_color(grid)
     seen = np.zeros(grid.shape, dtype=bool)
@@ -55,7 +59,8 @@ def parse(frame) -> Scene:
     rows, cols = grid.shape
     for r in range(rows):
         for c in range(cols):
-            if seen[r, c] or grid[r, c] == bg:
+            masked = hud_mask is not None and hud_mask[r, c]
+            if seen[r, c] or grid[r, c] == bg or masked:
                 continue
             color = int(grid[r, c])
             cells = []
@@ -66,7 +71,10 @@ def parse(frame) -> Scene:
                 cells.append((cr, cc))
                 for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     nr, nc = cr + dr, cc + dc
-                    if 0 <= nr < rows and 0 <= nc < cols and not seen[nr, nc] and grid[nr, nc] == color:
+                    if not (0 <= nr < rows and 0 <= nc < cols):
+                        continue
+                    nmasked = hud_mask is not None and hud_mask[nr, nc]
+                    if not seen[nr, nc] and grid[nr, nc] == color and not nmasked:
                         seen[nr, nc] = True
                         q.append((nr, nc))
             cset = frozenset(cells)
