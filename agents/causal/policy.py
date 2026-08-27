@@ -6,7 +6,21 @@ from collections import namedtuple
 
 from arcengine import GameAction
 
-Candidate = namedtuple("Candidate", "action x y key")
+Candidate = namedtuple("Candidate", "action x y key has_object")
+
+GRID_N = 6
+
+
+def cell_center(gx: int, gy: int) -> tuple[int, int]:
+    x = int((gx + 0.5) * 64 / GRID_N)
+    y = int((gy + 0.5) * 64 / GRID_N)
+    return x, y
+
+
+def cell_of(x: int, y: int) -> tuple[int, int]:
+    gx = min(GRID_N - 1, int(x) * GRID_N // 64)
+    gy = min(GRID_N - 1, int(y) * GRID_N // 64)
+    return gx, gy
 
 
 def _as_action(a):
@@ -14,30 +28,38 @@ def _as_action(a):
     return a if isinstance(a, GameAction) else GameAction.from_id(a)
 
 
-def action_key(action, target_obj) -> str:
+def action_key(action, cell=None) -> str:
     if not action.is_complex():
         return action.name
-    if target_obj is None:
+    if cell is None:
         return f"{action.name}@empty"
-    return f"{action.name}@color={target_obj.color},size={target_obj.size}"
+    gx, gy = cell
+    return f"{action.name}@cell={gx},{gy}"
+
+
+def _object_cells(scene) -> set:
+    occ = set()
+    for o in scene.objects:
+        for (r, c) in o.cells:
+            occ.add(cell_of(c, r))   # x=col, y=row
+    return occ
 
 
 def candidates(scene, available_actions) -> list:
     out = []
+    occ = _object_cells(scene)
     for a in available_actions:
         action = _as_action(a)
         if not action.is_complex():
-            out.append(Candidate(action, None, None, action.name))
-        elif not scene.objects:
-            # Cena sem objetos: emite 1 candidato de fallback no centro da
-            # grade, senão a ação complexa fica sem nenhum candidato e
-            # decide() poderia retornar None mesmo havendo ação disponível.
-            out.append(Candidate(action, 32, 32, f"{action.name}@empty"))
+            out.append(Candidate(action, None, None, action.name, False))
         else:
-            for o in scene.objects:
-                y = int(round(o.centroid[0]))    # row
-                x = int(round(o.centroid[1]))    # col
-                out.append(Candidate(action, x, y, action_key(action, o)))
+            for gy in range(GRID_N):
+                for gx in range(GRID_N):
+                    x, y = cell_center(gx, gy)
+                    out.append(
+                        Candidate(action, x, y, action_key(action, (gx, gy)),
+                                  (gx, gy) in occ)
+                    )
     return out
 
 
@@ -59,6 +81,8 @@ class Policy:
             s += 0.5
         if eff is not None and eff.kind == "none":
             s -= 2.0
+        if cand.has_object:
+            s += 0.5
         return s
 
     def decide(self, scene, model, available_actions, seen_effects, budget_frac):
