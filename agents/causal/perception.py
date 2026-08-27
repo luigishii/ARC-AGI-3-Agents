@@ -80,6 +80,27 @@ def parse(frame) -> Scene:
     return Scene(objects=objects, grid=grid)
 
 
+def match_objects(prev: Scene | None, curr: Scene) -> Scene:
+    prev_objs = list(prev.objects) if prev is not None else []
+    used = set()
+    new_objs = []
+    for o in curr.objects:
+        best = None
+        best_d = None
+        for p in prev_objs:
+            if p.id in used or p.color != o.color or p.shape_hash != o.shape_hash:
+                continue
+            d = (p.centroid[0] - o.centroid[0]) ** 2 + (p.centroid[1] - o.centroid[1]) ** 2
+            if best_d is None or d < best_d:
+                best, best_d = p, d
+        if best is not None:
+            used.add(best.id)
+            new_objs.append(replace(o, id=best.id))
+        else:
+            new_objs.append(replace(o, id=next(_id_counter)))
+    return Scene(objects=new_objs, grid=curr.grid)
+
+
 def object_at(scene: Scene, x: int, y: int):
     for o in scene.objects:
         if (y, x) in o.cells:      # x=col, y=row
