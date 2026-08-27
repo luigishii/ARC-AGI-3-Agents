@@ -40,6 +40,9 @@ ENV = (
     "CAUSAL_PRIOR=" + REPO + "/agents/causal/prior.json\n"
     "CAUSAL_MAX_ACTIONS=100000\n"
     "CAUSAL_LLM=1\n"
+    "CAUSAL_TYPED=1\n"       # síntese fatorada f_τ (Qwen valida por-tipo via accept_rule)
+    "CAUSAL_ETA=1\n"         # exploração por erro de ontologia (η)
+    "CAUSAL_IW=1\n"          # planner Iterated Width sobre o TypedWorldModel
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
