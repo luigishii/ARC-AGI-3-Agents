@@ -67,8 +67,10 @@ class CausalModel:
         return action_key in self.progress_keys
 
     def record_prediction(self, predicted, actual: Effect):
+        if predicted is None:
+            return
         self._pred_total += 1
-        if predicted is not None and predicted.kind == actual.kind:
+        if predicted.kind == actual.kind:
             self._pred_hits += 1
 
     def stats(self) -> dict:

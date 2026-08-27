@@ -30,6 +30,21 @@ def test_prediction_accuracy_tracking():
     assert abs(m.stats()["prediction_accuracy"] - 0.5) < 1e-9
 
 
+def test_prediction_accuracy_ignores_none_prediction():
+    # None (primeiro encontro, sem previsao a avaliar) nao entra no denominador
+    m = CausalModel()
+    m.record_prediction(None, Effect("moved", (0, 1)))
+    m.record_prediction(Effect("moved", (0, 1)), Effect("moved", (0, 1)))
+    assert abs(m.stats()["prediction_accuracy"] - 1.0) < 1e-9
+
+
+def test_prediction_accuracy_all_none_is_zero():
+    # so previsoes None -> pred_total=0 -> guarda de divisao por zero
+    m = CausalModel()
+    m.record_prediction(None, Effect("moved", (0, 1)))
+    assert m.stats()["prediction_accuracy"] == 0.0
+
+
 def test_serialization_roundtrip():
     m = CausalModel()
     m._bump("ACTION1", Effect("moved", (0, 1)), level_up=True)
