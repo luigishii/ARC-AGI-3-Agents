@@ -35,7 +35,9 @@ def test_stack_uses_last_layer():
 
 def test_object_at():
     grid = np.zeros((5, 5), dtype=int)
-    grid[2, 2] = 4
+    grid[1, 4] = 4                                    # linha 1, coluna 4 (assimétrico)
     scene = parse(grid.tolist())
-    assert object_at(scene, x=2, y=2).color == 4     # x=col, y=row
-    assert object_at(scene, x=0, y=0) is None
+    # x=col, y=row: um swap x/y quebraria estas asserções
+    assert object_at(scene, x=4, y=1).color == 4
+    assert object_at(scene, x=1, y=4) is None         # coordenada trocada -> vazio
+    assert object_at(scene, x=0, y=0) is None         # posição vazia -> None
