@@ -20,6 +20,11 @@ class LLMClient:
     def complete(self, prompt: str) -> str:
         raise NotImplementedError
 
+    def complete_many(self, prompt: str, n: int) -> list:
+        # amostragem massiva: impl padrão = n chamadas. VLLMClient/HFClient podem
+        # sobrescrever com n-amostras reais (temperatura>0) numa só chamada.
+        return [self.complete(prompt) for _ in range(n)]
+
 
 class NullLLMClient(LLMClient):
     def complete(self, prompt: str) -> str:
