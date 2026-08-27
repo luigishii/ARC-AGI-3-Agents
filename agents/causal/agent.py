@@ -28,6 +28,7 @@ class CausalObjectAgent(Agent):
         self._last_predicted = None
         self._last_level = 0
         self._seen_effects = set()
+        self._pending_log = None
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -40,6 +41,7 @@ class CausalObjectAgent(Agent):
         ):
             self._prev_scene = None
             self._last_key = None
+            self._pending_log = None
             return GameAction.RESET
 
         scene = match_objects(self._prev_scene, parse(latest_frame.frame))
@@ -50,6 +52,10 @@ class CausalObjectAgent(Agent):
             actual = self._model.observe(self._prev_scene, self._last_key, scene, level_up)
             self._model.record_prediction(self._last_predicted, actual)
             self._seen_effects.add(actual.kind)
+            # logging deferido: agora sabemos o efeito real da ação anterior
+            if self._pending_log is not None:
+                self._instr.log(**self._pending_log, actual=actual)
+                self._pending_log = None
 
         # decide a próxima ação
         budget_frac = 1.0
@@ -59,6 +65,9 @@ class CausalObjectAgent(Agent):
             scene, self._model, latest_frame.available_actions or [GameAction.ACTION1],
             self._seen_effects, budget_frac,
         )
+        if cand is None:
+            self._pending_log = None
+            return GameAction.RESET
         action = cand.action
         if action.is_complex():
             action.set_data({"x": cand.x, "y": cand.y})
@@ -70,8 +79,16 @@ class CausalObjectAgent(Agent):
             "predicted": None if predicted is None else predicted.kind,
             "confidence": round(conf, 3), "model": self._model.stats(),
         }
-        self._instr.log(action.name, cand.x, cand.y, mode, predicted, None,
-                        self._model.stats(), {"key": cand.key})
+        # guarda o registro (sem `actual`); será logado quando o efeito for observado
+        self._pending_log = {
+            "action_name": action.name,
+            "x": cand.x,
+            "y": cand.y,
+            "mode": mode,
+            "predicted": predicted,
+            "model_stats": self._model.stats(),
+            "reasoning": {"key": cand.key},
+        }
 
         # guarda estado p/ o próximo passo
         self._prev_scene = scene
