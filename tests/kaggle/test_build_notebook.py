@@ -64,6 +64,16 @@ def test_cells_contain_submission_mechanics(tmp_path):
     assert "submission.parquet" in text
 
 
+def test_notebook_packages_llm_and_env(tmp_path):
+    root, bn = _fake_repo(tmp_path)
+    assert "llm.py" in bn.MODULES and "planning.py" in bn.MODULES
+    nb = bn.build_notebook(bn.read_sources(root))
+    text = "".join("".join(c["source"]) for c in nb["cells"])
+    assert "agents/causal/llm.py" in text        # módulo embutido
+    assert "CAUSAL_LLM" in text
+    assert "QWEN_MODEL_PATH" in text
+
+
 def test_main_writes_valid_ipynb(tmp_path, monkeypatch):
     root, bn = _fake_repo(tmp_path)
     monkeypatch.setattr(bn, "_repo_root", lambda: root)

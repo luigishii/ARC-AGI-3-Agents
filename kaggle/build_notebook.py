@@ -10,8 +10,13 @@ COMP_REPO = "/kaggle/input/competitions/arc-prize-2026-arc-agi-3/ARC-AGI-3-Agent
 MODULES = [
     "__init__.py", "agent.py", "causal_model.py", "hud.py",
     "instrumentation.py", "novelty.py", "perception.py", "policy.py",
-    "transfer.py",
+    "transfer.py", "planning.py", "llm.py",
 ]
+
+# Caminho do dataset de pesos do LLM no Kaggle. O usuário anexa o dataset ao
+# notebook e edita este valor para o slug do seu dataset, depois regenera o
+# notebook (uv run python kaggle/build_notebook.py).
+MODEL_DATASET_PATH = "/kaggle/input/qwen2-5-coder-7b-instruct"
 
 TRIMMED_INIT = (
     "from typing import Type\n"
@@ -33,6 +38,8 @@ ENV = (
     "RECORDINGS_DIR=/kaggle/working/server_recording\n"
     "CAUSAL_PRIOR=" + REPO + "/agents/causal/prior.json\n"
     "CAUSAL_MAX_ACTIONS=100000\n"
+    "CAUSAL_LLM=1\n"
+    "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
 
