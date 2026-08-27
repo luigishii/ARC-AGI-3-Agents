@@ -21,6 +21,7 @@ from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
 from .iw import iw_plan
+from .goals import compile_reward, static_reward_check, goal_fn_from_reward
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
@@ -90,6 +91,8 @@ class CausalObjectAgent(Agent):
         self._typed_on = os.environ.get("CAUSAL_TYPED", "0") != "0"
         self._iw_on = os.environ.get("CAUSAL_IW", "0") != "0"
         self._since_type = 0
+        self._reward_fn = None        # A: reward_function/predicado de meta (goal-directed IW)
+        self._reward_src = None
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -98,6 +101,7 @@ class CausalObjectAgent(Agent):
         if os.environ.get("CAUSAL_PRIOR_SAVE"):
             from .transfer import save_prior
             save_prior(self._prior, os.environ.get("CAUSAL_PRIOR", DEFAULT_PRIOR_PATH))
+        print(f"[causal] phase2 stats: {self.phase2_stats()}")   # B: diagnóstico no log
         super().cleanup(scorecard)
 
     def choose_action(
@@ -182,7 +186,9 @@ class CausalObjectAgent(Agent):
             tau = self._pick_type_to_learn()
             if tau is not None:
                 self._try_learn_type_rule(tau)
-                self._since_type = 0
+            if self._reward_fn is None:
+                self._try_learn_reward(scene)      # A: sintetiza predicado de meta
+            self._since_type = 0
         cand = None
         # (2) meta do LLM com validação
         if self._goal is not None:
@@ -279,7 +285,8 @@ class CausalObjectAgent(Agent):
         if not self._typed.sources:
             return None
         start = [(o.shape_hash, _obj_state(o)) for o in scene.objects]
-        return iw_plan(start, [c.key for c in cands], self._typed, max_nodes=300)
+        gf = goal_fn_from_reward(self._reward_fn) if self._reward_fn else None
+        return iw_plan(start, [c.key for c in cands], self._typed, goal_fn=gf, max_nodes=300)
 
     def _eta_bonus(self, key) -> float:
         # η = ontology_error(0, effect_entropy) = incerteza de efeito da linha (τ,key).
@@ -317,6 +324,42 @@ class CausalObjectAgent(Agent):
             lines.append(f"  {t['before']} --{t['action']}--> {t['after']}")
         lines.append('Responda JSON {"type":"code","source":"def transition(obj, action, ctx): ..."}')
         return "\n".join(lines)
+
+    def _build_reward_prompt(self, scene) -> str:
+        objs = ", ".join(f"(color={o.color},size={o.size})" for o in scene.objects[:8])
+        return ("Infira reward_function(state) que retorna (reward, goal_flag) — goal_flag=True "
+                "quando o NÍVEL está resolvido; olhe SÓ o state (lista de (tipo,{x,y,color,...})). "
+                f"OBJETOS atuais: {objs}. "
+                'Responda SÓ JSON {"type":"code","source":"def reward_function(state): ..."}')
+
+    def _try_learn_reward(self, scene) -> bool:
+        """A: sintetiza a reward_function/predicado de meta via LLM, valida pelo check
+        estático anti-trapaça (usa o state, sem estado global). Aceita → IW goal-directed."""
+        if self._reward_fn is not None:
+            return False
+        self._llm_calls += 1
+        prompt = self._build_reward_prompt(scene)
+        resps = (self._llm.complete_many(prompt, self._n_samples)
+                 if self._n_samples > 1 else [self._llm.complete(prompt)])
+        for r in resps:
+            g = parse_goal(r)
+            src = g.get("source") if g and g.get("type") == "code" else None
+            if src and static_reward_check(src):
+                self._reward_fn = compile_reward(src)
+                self._reward_src = src
+                return True
+        return False
+
+    def phase2_stats(self) -> dict:
+        """B: telemetria diagnosticável no log do Kaggle."""
+        return {
+            "llm_kind": self._llm_kind,
+            "llm_calls": self._llm_calls,
+            "n_types": len(self._type_buffer),
+            "n_rules": len(self._typed.sources),
+            "reward_learned": self._reward_fn is not None,
+            "eta_rows": len(self._etable.rows),
+        }
 
     def _rule_error(self, src) -> str:
         from .typed_model import compile_rule

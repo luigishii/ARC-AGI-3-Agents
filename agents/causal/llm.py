@@ -92,6 +92,16 @@ def client_kind(client) -> str:
         type(client).__name__, type(client).__name__.lower())
 
 
+_FEWSHOT = (
+    "EXAMPLES (code goals use DSL helpers: rarest_color/objects_of_color/largest/"
+    "nearest/click/press/move_toward):\n"
+    '  {"type":"code","source":"def decide(scene):\\n    c = rarest_color(scene)\\n'
+    '    o = largest(objects_of_color(scene, c))\\n    r, k = ocentroid(o)\\n'
+    '    return click(int(k)//11, int(r)//11)"}\n'
+    '  {"type":"code","source":"def decide(scene):\\n    return press(\'ACTION2\')"}'
+)
+
+
 def build_prompt(scene, dynamics) -> str:
     dyn = dynamics or {}
     lines = [f"OBJECTS ({len(scene.objects)}):"]
@@ -100,8 +110,9 @@ def build_prompt(scene, dynamics) -> str:
             f"  id={o.id} color={o.color} centroid={o.centroid} "
             f"size={o.size} bbox={o.bbox}"
         )
-    lines.append(f"AVAILABLE_ACTIONS: {dyn.get('available', [])}")
+    lines.append(f"AVAILABLE_ACTIONS: {dyn.get('available', [])}   (use ONLY these)")
     lines.append(f"DYNAMICS: moves={dyn.get('moves', {})} notes={dyn.get('notes', '')}")
+    lines.append(_FEWSHOT)
     lines.append(_INSTRUCTION)
     return "\n".join(lines)
 
