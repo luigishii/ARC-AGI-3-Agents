@@ -129,20 +129,23 @@ class CausalObjectAgent(Agent):
             actual = self._model.observe(self._prev_scene, self._last_key, scene, level_up)
             self._model.record_prediction(self._last_predicted, actual)
             self._seen_effects.add(actual.kind)
-            # transition_buffer p/ retrodição: (cena_t, ação_tomada, efeito_kind)
-            self._buffer.append((self._prev_scene, self._last_key, actual.kind))
-            # Fase-2: assinaturas de efeito por tipo (η) + transições por tipo (f_τ)
-            self._observe_types(self._prev_scene, scene, self._last_key)
-            if level_up:
-                self._novelty.record_goal_anchor(state_signature(self._prev_scene))
-                self._goal = None                     # nível cumprido → re-planejar
-            self._novelty.observe_transition(self._last_key, scene)
-            self._move.observe(self._last_key, self._prev_scene, scene)
             if self._last_feature is not None:
                 self._prior.observe(self._last_feature, actual.kind)
-            cur_sig = state_signature(scene)
-            if self._last_sig is not None and self._last_key is not None:
-                self._tmodel.observe(self._last_sig, self._last_key, cur_sig)
+            if level_up:
+                # frame-role (Tycho Gap 2): o sucessor é init-de-próximo-nível, NÃO um
+                # sucessor mecânico → registra só o desfecho (âncora de meta) e não polui
+                # os aprendizes de dinâmica com uma transição decisão→init fabricada.
+                self._novelty.record_goal_anchor(state_signature(self._prev_scene))
+                self._goal = None                     # nível cumprido → re-planejar
+            else:
+                # transição DECISÃO→DECISÃO: alimenta retrodição + f_τ/η + movimento + forward
+                self._buffer.append((self._prev_scene, self._last_key, actual.kind))
+                self._observe_types(self._prev_scene, scene, self._last_key)
+                self._novelty.observe_transition(self._last_key, scene)
+                self._move.observe(self._last_key, self._prev_scene, scene)
+                cur_sig = state_signature(scene)
+                if self._last_sig is not None:
+                    self._tmodel.observe(self._last_sig, self._last_key, cur_sig)
             # logging deferido: agora sabemos o efeito real da ação anterior
             if self._pending_log is not None:
                 self._instr.log(**self._pending_log, actual=actual)
