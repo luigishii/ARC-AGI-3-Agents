@@ -60,3 +60,48 @@ def parse_goal(text):
     if t == "reach" and "avatar" in g and "target" in g:
         return g
     return None
+
+
+def _resolve(sel, objects):
+    if not objects:
+        return None
+    if sel == "rarest":
+        freq = Counter(o.color for o in objects)
+        return min(objects, key=lambda o: freq[o.color])
+    if isinstance(sel, dict):
+        if "id" in sel:
+            for o in objects:
+                if o.id == sel["id"]:
+                    return o
+            return None
+        if "color" in sel:
+            ms = [o for o in objects if o.color == sel["color"]]
+            return ms[0] if ms else None
+    return None
+
+
+def execute_goal(goal, scene, moves):
+    t = goal.get("type")
+    if t == "press":
+        return goal.get("action")
+    if t == "click_cell":
+        return f"ACTION6@cell={goal['gx']},{goal['gy']}"
+    if t == "reach":
+        if not moves:
+            return None
+        avatar = _resolve(goal.get("avatar"), scene.objects)
+        if avatar is None:
+            return None
+        others = [o for o in scene.objects if o.id != avatar.id]
+        target = _resolve(goal.get("target"), others)
+        if target is None:
+            return None
+        ay, ax = avatar.centroid
+        ty, tx = target.centroid
+        best, bd = None, abs(ty - ay) + abs(tx - ax)
+        for k, (dr, dc) in moves.items():
+            nd = abs(ty - (ay + dr)) + abs(tx - (ax + dc))
+            if nd < bd:
+                bd, best = nd, k
+        return best
+    return None
