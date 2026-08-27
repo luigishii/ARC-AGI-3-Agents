@@ -14,6 +14,7 @@
 - **Orçamento ~80 ações/jogo** (`Agent.MAX_ACTIONS` default 80). Eficiência conta no score.
 - **Grade:** `latest_frame.frame` é `list[list[list[int]]]` (pilha de camadas 64×64, valores 0–15). A grade atual é `frame[-1]`. No fim de nível a pilha pode ter >1 camada.
 - **Ação:** decidir x,y só quando `action.is_complex()` é True; usar `available_actions` dinamicamente (não hardcodar quais ações existem). RESET quando `state ∈ {NOT_PLAYED, GAME_OVER}` ou `full_reset`.
+- **⚠️ `available_actions` é `list[int]` (ids), NÃO `list[GameAction]`.** `FrameData` coage `GameAction`→`int` (o `.value`/id). Converter sempre com `GameAction.from_id(i)` antes de chamar `.is_complex()`/`.set_data()`. Além disso, `GameAction` é um `Enum` **simples** (não `IntEnum`): `GameAction.ACTION1 == 1` é **False** e `GameAction(6)` **levanta erro** — use `from_id`. Mapa: id 0=RESET, 1..5/7 simples, **6=ACTION6 (única complexa)**. `GameAction.ACTION1.value == 1`.
 - **Determinismo:** Policy é determinística com ε pequeno; seed fixa nos testes.
 - **Logar a ação nós mesmos** (id+x,y+reasoning) — o `action_input` das gravações oficiais é placeholder.
 - Rodar testes: `cd ARC-AGI-3-Agents && uv run pytest tests/causal/ -v`.
@@ -105,8 +106,9 @@ class CausalObjectAgent(Agent):
             latest_frame, "full_reset", False
         ):
             return GameAction.RESET
-        actions = latest_frame.available_actions or [GameAction.ACTION1]
-        action = actions[0]
+        raw = latest_frame.available_actions or [GameAction.ACTION1.value]
+        first = raw[0]
+        action = first if isinstance(first, GameAction) else GameAction.from_id(first)
         action.reasoning = {"stage": "stub"}
         return action
 ```
@@ -733,7 +735,14 @@ from __future__ import annotations
 import random
 from collections import namedtuple
 
+from arcengine import GameAction
+
 Candidate = namedtuple("Candidate", "action x y key")
+
+
+def _as_action(a):
+    # available_actions pode vir como int (id) ou GameAction. Normaliza p/ GameAction.
+    return a if isinstance(a, GameAction) else GameAction.from_id(a)
 
 
 def action_key(action, target_obj) -> str:
@@ -746,7 +755,8 @@ def action_key(action, target_obj) -> str:
 
 def candidates(scene, available_actions) -> list:
     out = []
-    for action in available_actions:
+    for a in available_actions:
+        action = _as_action(a)
         if not action.is_complex():
             out.append(Candidate(action, None, None, action.name))
         else:
@@ -1033,7 +1043,7 @@ def test_closes_causal_loop_across_two_steps():
     g0 = np.zeros((6, 6), dtype=int); g0[1, 1] = 3
     f0 = _frame(g0.tolist())
     act0 = a.choose_action([f0], f0)          # 1o passo: sem transição ainda
-    assert act0 in f0.available_actions
+    assert act0.value in f0.available_actions   # available_actions são ints (ids)
     g1 = np.zeros((6, 6), dtype=int); g1[1, 2] = 3   # objeto moveu
     f1 = _frame(g1.tolist())
     a.choose_action([f0, f1], f1)             # observa a transição de act0
