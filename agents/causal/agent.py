@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 from arcengine import FrameData, GameAction, GameState
@@ -22,7 +23,7 @@ class CausalObjectAgent(Agent):
     def _init_causal_state(self) -> None:
         self._model = CausalModel()
         self._policy = Policy(seed=0, epsilon=0.05)
-        self._instr = Instrumentation()
+        self._instr = Instrumentation(path=os.environ.get("CAUSAL_LOG"))
         self._prev_scene = None
         self._last_key = None
         self._last_predicted = None
