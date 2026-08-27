@@ -8,10 +8,11 @@ from agents.agent import Agent
 from .causal_model import CausalModel
 from .instrumentation import Instrumentation
 from .perception import match_objects, parse, to_grid
-from .policy import Policy
+from .policy import Policy, candidates
 from .hud import HudMask
 from .novelty import NoveltyModel, state_signature
 from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_PRIOR_PATH
+from .planning import TransitionModel, plan
 
 
 class CausalObjectAgent(Agent):
@@ -27,6 +28,9 @@ class CausalObjectAgent(Agent):
         self.MAX_ACTIONS = int(os.environ.get("CAUSAL_MAX_ACTIONS", type(self).MAX_ACTIONS))
         self._model = CausalModel()
         self._novelty = NoveltyModel()
+        self._tmodel = TransitionModel()
+        self._last_sig = None
+        self._plan_on = os.environ.get("CAUSAL_PLAN", "1") != "0"
         self._prior = shared_prior()
         load_shared_once(os.environ.get("CAUSAL_PRIOR", DEFAULT_PRIOR_PATH))
         self._last_feature = None
@@ -79,6 +83,9 @@ class CausalObjectAgent(Agent):
             self._novelty.observe_transition(self._last_key, scene)
             if self._last_feature is not None:
                 self._prior.observe(self._last_feature, actual.kind)
+            cur_sig = state_signature(scene)
+            if self._last_sig is not None and self._last_key is not None:
+                self._tmodel.observe(self._last_sig, self._last_key, cur_sig)
             # logging deferido: agora sabemos o efeito real da ação anterior
             if self._pending_log is not None:
                 self._instr.log(**self._pending_log, actual=actual)
@@ -88,10 +95,18 @@ class CausalObjectAgent(Agent):
         budget_frac = 1.0
         if self.MAX_ACTIONS not in (0, float("inf")):
             budget_frac = max(0.0, 1 - self.action_counter / self.MAX_ACTIONS)
-        cand = self._policy.decide(
-            scene, self._model, latest_frame.available_actions or [GameAction.ACTION1],
-            self._seen_effects, budget_frac, novelty=self._novelty, prior=self._prior,
-        )
+        cands = candidates(scene, latest_frame.available_actions or [GameAction.ACTION1])
+        cand = None
+        if self._plan_on and cands:
+            planned = plan(state_signature(scene), [c.key for c in cands],
+                           self._tmodel, self._novelty, self._novelty.goal_anchors)
+            if planned is not None:
+                cand = {c.key: c for c in cands}.get(planned)
+        if cand is None:
+            cand = self._policy.decide(
+                scene, self._model, latest_frame.available_actions or [GameAction.ACTION1],
+                self._seen_effects, budget_frac, novelty=self._novelty, prior=self._prior,
+            )
         if cand is None:
             self._pending_log = None
             return GameAction.RESET
@@ -122,6 +137,7 @@ class CausalObjectAgent(Agent):
         self._prev_scene = scene
         self._prev_grid = grid
         self._last_key = cand.key
+        self._last_sig = state_signature(scene)
         self._last_feature = abstract_feature(cand)
         self._last_predicted = predicted
         self._last_level = latest_frame.levels_completed or 0
