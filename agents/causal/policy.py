@@ -68,7 +68,7 @@ class Policy:
         self._rng = random.Random(seed)
         self.epsilon = epsilon
 
-    def score(self, cand, model, seen_effects, budget_frac, novelty=None) -> float:
+    def score(self, cand, model, seen_effects, budget_frac, novelty=None, prior=None) -> float:
         eff, conf = model.predict(cand.key)
         s = 0.0
         if model.is_progress(cand.key):
@@ -88,9 +88,12 @@ class Policy:
             s -= 2.0
         if cand.has_object:
             s += 0.5
+        if prior is not None:
+            from .transfer import abstract_feature, W_PRIOR
+            s += W_PRIOR * prior.productivity(abstract_feature(cand))
         return s
 
-    def decide(self, scene, model, available_actions, seen_effects, budget_frac, novelty=None):
+    def decide(self, scene, model, available_actions, seen_effects, budget_frac, novelty=None, prior=None):
         cands = candidates(scene, available_actions)
         if not cands:
             return None
@@ -98,7 +101,7 @@ class Policy:
             return self._rng.choice(cands)
         best, best_s = None, None
         for c in cands:
-            sc = self.score(c, model, seen_effects, budget_frac, novelty=novelty)
+            sc = self.score(c, model, seen_effects, budget_frac, novelty=novelty, prior=prior)
             if best_s is None or sc > best_s:
                 best, best_s = c, sc
         return best
