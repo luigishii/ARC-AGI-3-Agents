@@ -71,6 +71,8 @@ def load_prior(path):
 
 
 _SHARED = TransferPrior()
+_load_lock = threading.Lock()
+_loaded = False
 
 
 def shared_prior() -> TransferPrior:
@@ -78,5 +80,17 @@ def shared_prior() -> TransferPrior:
 
 
 def reset_shared_prior() -> None:
-    global _SHARED
+    global _SHARED, _loaded
     _SHARED = TransferPrior()
+    _loaded = False
+
+
+def load_shared_once(path) -> None:
+    global _loaded
+    with _load_lock:
+        if _loaded:
+            return
+        _loaded = True
+        disk = load_prior(path)
+        if disk is not None:
+            shared_prior().merge(disk)
