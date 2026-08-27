@@ -81,6 +81,8 @@ class Policy:
             s += 0.5
         if eff is not None and eff.kind == "none":
             s -= 2.0
+        if cand.has_object:
+            s += 0.5
         return s
 
     def decide(self, scene, model, available_actions, seen_effects, budget_frac):
