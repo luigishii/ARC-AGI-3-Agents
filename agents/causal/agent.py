@@ -13,6 +13,12 @@ from .hud import HudMask
 from .novelty import NoveltyModel, state_signature
 from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_PRIOR_PATH
 from .planning import TransitionModel, plan
+from .navigate import MovementModel, navigate
+from .llm import make_llm_client, build_prompt, parse_goal, execute_goal
+
+QUERY_COOLDOWN = 8
+GOAL_FAIL_MAX = 3
+GOAL_AGE_MAX = 20
 
 
 class CausalObjectAgent(Agent):
@@ -29,6 +35,14 @@ class CausalObjectAgent(Agent):
         self._model = CausalModel()
         self._novelty = NoveltyModel()
         self._tmodel = TransitionModel()
+        self._move = MovementModel()
+        self._nav_on = os.environ.get("CAUSAL_NAV", "1") != "0"
+        self._llm = make_llm_client(os.environ.get("QWEN_MODEL_PATH"))
+        self._llm_on = os.environ.get("CAUSAL_LLM", "0") != "0"
+        self._goal = None
+        self._goal_age = 0
+        self._goal_fails = 0
+        self._since_query = 10 ** 9
         self._last_sig = None
         self._plan_on = os.environ.get("CAUSAL_PLAN", "1") != "0"
         self._prior = shared_prior()
@@ -80,7 +94,9 @@ class CausalObjectAgent(Agent):
             self._seen_effects.add(actual.kind)
             if level_up:
                 self._novelty.record_goal_anchor(state_signature(self._prev_scene))
+                self._goal = None                     # nível cumprido → re-planejar
             self._novelty.observe_transition(self._last_key, scene)
+            self._move.observe(self._last_key, self._prev_scene, scene)
             if self._last_feature is not None:
                 self._prior.observe(self._last_feature, actual.kind)
             cur_sig = state_signature(scene)
@@ -95,16 +111,42 @@ class CausalObjectAgent(Agent):
         budget_frac = 1.0
         if self.MAX_ACTIONS not in (0, float("inf")):
             budget_frac = max(0.0, 1 - self.action_counter / self.MAX_ACTIONS)
-        cands = candidates(scene, latest_frame.available_actions or [GameAction.ACTION1])
+        avail = latest_frame.available_actions or [GameAction.ACTION1]
+        cands = candidates(scene, avail)
+        keymap = {c.key: c for c in cands}
+        moves = self._move.moves()
+        # (1) consulta esparsa ao LLM: só se ligado, sem meta ativa e passado o cooldown
+        self._since_query += 1
+        if self._llm_on and self._goal is None and self._since_query >= QUERY_COOLDOWN:
+            dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
+            self._goal = parse_goal(self._llm.complete(build_prompt(scene, dyn)))
+            self._goal_age = 0
+            self._since_query = 0
         cand = None
-        if self._plan_on and cands:
+        # (2) meta do LLM com validação
+        if self._goal is not None:
+            self._goal_age += 1
+            gkey = execute_goal(self._goal, scene, moves)
+            if gkey is not None and gkey in keymap:
+                cand = keymap[gkey]
+                self._goal_fails = 0
+            else:
+                self._goal_fails += 1
+            if self._goal_fails >= GOAL_FAIL_MAX or self._goal_age >= GOAL_AGE_MAX:
+                self._goal = None
+        # (3) fallback determinístico: navigate → plan → greedy
+        if cand is None and self._nav_on:
+            nk = navigate(scene, self._move)
+            if nk is not None:
+                cand = keymap.get(nk)
+        if cand is None and self._plan_on and cands:
             planned = plan(state_signature(scene), [c.key for c in cands],
                            self._tmodel, self._novelty, self._novelty.goal_anchors)
             if planned is not None:
-                cand = {c.key: c for c in cands}.get(planned)
+                cand = keymap.get(planned)
         if cand is None:
             cand = self._policy.decide(
-                scene, self._model, latest_frame.available_actions or [GameAction.ACTION1],
+                scene, self._model, avail,
                 self._seen_effects, budget_frac, novelty=self._novelty, prior=self._prior,
             )
         if cand is None:
