@@ -11,6 +11,7 @@ from .perception import match_objects, parse, to_grid
 from .policy import Policy
 from .hud import HudMask
 from .novelty import NoveltyModel, state_signature
+from .transfer import shared_prior, abstract_feature
 
 
 class CausalObjectAgent(Agent):
@@ -25,6 +26,8 @@ class CausalObjectAgent(Agent):
     def _init_causal_state(self) -> None:
         self._model = CausalModel()
         self._novelty = NoveltyModel()
+        self._prior = shared_prior()
+        self._last_feature = None
         self._policy = Policy(seed=0, epsilon=0.05)
         self._instr = Instrumentation(path=os.environ.get("CAUSAL_LOG"))
         self._prev_scene = None
@@ -66,6 +69,8 @@ class CausalObjectAgent(Agent):
             if level_up:
                 self._novelty.record_goal_anchor(state_signature(self._prev_scene))
             self._novelty.observe_transition(self._last_key, scene)
+            if self._last_feature is not None:
+                self._prior.observe(self._last_feature, actual.kind)
             # logging deferido: agora sabemos o efeito real da ação anterior
             if self._pending_log is not None:
                 self._instr.log(**self._pending_log, actual=actual)
@@ -77,7 +82,7 @@ class CausalObjectAgent(Agent):
             budget_frac = max(0.0, 1 - self.action_counter / self.MAX_ACTIONS)
         cand = self._policy.decide(
             scene, self._model, latest_frame.available_actions or [GameAction.ACTION1],
-            self._seen_effects, budget_frac, novelty=self._novelty,
+            self._seen_effects, budget_frac, novelty=self._novelty, prior=self._prior,
         )
         if cand is None:
             self._pending_log = None
@@ -109,6 +114,7 @@ class CausalObjectAgent(Agent):
         self._prev_scene = scene
         self._prev_grid = grid
         self._last_key = cand.key
+        self._last_feature = abstract_feature(cand)
         self._last_predicted = predicted
         self._last_level = latest_frame.levels_completed or 0
         return action
