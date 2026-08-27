@@ -1,6 +1,12 @@
 from dataclasses import replace
 from agents.causal.perception import Scene, Object
-from agents.causal.llm import execute_goal
+from agents.causal.llm import execute_goal, parse_goal
+
+
+def test_parse_goal_code_type():
+    g = parse_goal('{"type":"code","source":"def decide(scene): return \'ACTION1\'"}')
+    assert g["type"] == "code" and "decide" in g["source"]
+    assert parse_goal('{"type":"code"}') is None      # falta source
 
 
 def _obj(cells, color=3, oid=0):
@@ -41,6 +47,16 @@ def test_execute_reach_rarest_target():
     goal = {"type": "reach", "avatar": {"id": 1}, "target": "rarest"}
     moves = {"ACTION1": (0, 1), "ACTION2": (0, -1)}
     assert execute_goal(goal, scene, moves) == "ACTION1"
+
+
+def test_execute_code_goal_returns_action():
+    goal = {"type": "code", "source": "def decide(scene):\n    return 'ACTION1'\n"}
+    assert execute_goal(goal, _scene([]), {}) == "ACTION1"
+
+
+def test_execute_code_goal_error_is_none():
+    goal = {"type": "code", "source": "def decide(scene):\n    return 1/0\n"}
+    assert execute_goal(goal, _scene([]), {}) is None
 
 
 def test_execute_reach_none_without_moves_or_object():

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-GOAL_TYPES = {"press", "click_cell", "reach"}
+GOAL_TYPES = {"press", "click_cell", "reach", "code"}
 
 _INSTRUCTION = (
     "You are playing a grid puzzle. Infer the GOAL and reply with ONLY a JSON "
@@ -112,6 +112,8 @@ def parse_goal(text):
         return g
     if t == "reach" and "avatar" in g and "target" in g:
         return g
+    if t == "code" and isinstance(g.get("source"), str):
+        return g
     return None
 
 
@@ -139,6 +141,9 @@ def execute_goal(goal, scene, moves):
         return goal.get("action")
     if t == "click_cell":
         return f"ACTION6@cell={goal['gx']},{goal['gy']}"
+    if t == "code":
+        from .sandbox import execute_code_goal
+        return execute_code_goal(goal.get("source", ""), scene)
     if t == "reach":
         if not moves:
             return None
