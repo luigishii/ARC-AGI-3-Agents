@@ -69,7 +69,12 @@ class CausalModel:
         return action_key in self.progress_keys
 
     def record_prediction(self, predicted, actual: Effect):
+        # Grading-set do Tycho (Gap 3): no-op previsto ↔ no-op observado NÃO entra na
+        # pontuação (senão um modelo que prevê "nada muda" p/ tudo infla a acurácia).
+        # Prever mudança num no-op real (ou vice-versa) conta como erro.
         if predicted is None:
+            return
+        if predicted.kind == "none" and actual.kind == "none":
             return
         self._pred_total += 1
         if predicted.kind == actual.kind:
