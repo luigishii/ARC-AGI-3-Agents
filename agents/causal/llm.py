@@ -148,7 +148,9 @@ def execute_goal(goal, scene, moves):
         return f"ACTION6@cell={goal['gx']},{goal['gy']}"
     if t == "code":
         from .sandbox import execute_code_goal
-        return execute_code_goal(goal.get("source", ""), scene)
+        from .dsl import DSL
+        return execute_code_goal(goal.get("source", ""), scene,
+                                 extra={**DSL, "MOVES": moves})
     if t == "reach":
         if not moves:
             return None
