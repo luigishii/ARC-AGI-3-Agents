@@ -37,22 +37,29 @@ def action_key(action, cell=None) -> str:
     return f"{action.name}@cell={gx},{gy}"
 
 
+def _object_cells(scene) -> set:
+    occ = set()
+    for o in scene.objects:
+        for (r, c) in o.cells:
+            occ.add(cell_of(c, r))   # x=col, y=row
+    return occ
+
+
 def candidates(scene, available_actions) -> list:
     out = []
+    occ = _object_cells(scene)
     for a in available_actions:
         action = _as_action(a)
         if not action.is_complex():
-            out.append(Candidate(action, None, None, action.name))
-        elif not scene.objects:
-            # Cena sem objetos: emite 1 candidato de fallback no centro da
-            # grade, senão a ação complexa fica sem nenhum candidato e
-            # decide() poderia retornar None mesmo havendo ação disponível.
-            out.append(Candidate(action, 32, 32, f"{action.name}@empty"))
+            out.append(Candidate(action, None, None, action.name, False))
         else:
-            for o in scene.objects:
-                y = int(round(o.centroid[0]))    # row
-                x = int(round(o.centroid[1]))    # col
-                out.append(Candidate(action, x, y, action_key(action, o)))
+            for gy in range(GRID_N):
+                for gx in range(GRID_N):
+                    x, y = cell_center(gx, gy)
+                    out.append(
+                        Candidate(action, x, y, action_key(action, (gx, gy)),
+                                  (gx, gy) in occ)
+                    )
     return out
 
 
