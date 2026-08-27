@@ -3,6 +3,7 @@ from typing import Type, cast
 from dotenv import load_dotenv
 
 from .agent import Agent, Playback
+from .causal import CausalObjectAgent
 from .recorder import Recorder
 from .swarm import Swarm
 from .templates.langgraph_functional_agent import LangGraphFunc, LangGraphTextOnly
@@ -29,9 +30,11 @@ for rec in Recorder.list():
 
 # update the agent dictionary to include subclasses of LLM class
 AVAILABLE_AGENTS["reasoningagent"] = ReasoningAgent
+AVAILABLE_AGENTS["causalobject"] = CausalObjectAgent
 
 __all__ = [
     "Swarm",
+    "CausalObjectAgent",
     "Random",
     "LangGraphFunc",
     "LangGraphTextOnly",
