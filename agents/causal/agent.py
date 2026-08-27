@@ -1,4 +1,5 @@
 import os
+from collections import deque
 from typing import Any
 
 from arcengine import FrameData, GameAction, GameState
@@ -14,6 +15,7 @@ from .novelty import NoveltyModel, state_signature
 from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_PRIOR_PATH
 from .planning import TransitionModel, plan
 from .navigate import MovementModel, navigate
+from .perception_strategy import PerceptionStrategy
 from .llm import make_llm_client, build_prompt, parse_goal, execute_goal
 from .ranker import rank_candidates
 
@@ -53,6 +55,7 @@ class CausalObjectAgent(Agent):
         self._policy = Policy(seed=0, epsilon=0.05)
         self._instr = Instrumentation(path=os.environ.get("CAUSAL_LOG"))
         self._prev_scene = None
+        self._buffer = deque(maxlen=int(os.environ.get("CAUSAL_BUFFER", "128")))
         self._last_key = None
         self._last_predicted = None
         self._last_level = 0
@@ -60,6 +63,7 @@ class CausalObjectAgent(Agent):
         self._pending_log = None
         self._hud = HudMask()
         self._prev_grid = None
+        self._percept = PerceptionStrategy()
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -87,6 +91,7 @@ class CausalObjectAgent(Agent):
         if self._prev_grid is not None:
             self._hud.update(self._prev_grid, grid)
         scene = match_objects(self._prev_scene, parse(latest_frame.frame, hud_mask=self._hud.mask()))
+        self._percept.observe(len(scene.objects))   # §2: instabilidade → fallback grid (Tycho)
 
         # fecha o loop causal da ação anterior
         if self._prev_scene is not None and self._last_key is not None:
@@ -94,6 +99,8 @@ class CausalObjectAgent(Agent):
             actual = self._model.observe(self._prev_scene, self._last_key, scene, level_up)
             self._model.record_prediction(self._last_predicted, actual)
             self._seen_effects.add(actual.kind)
+            # transition_buffer p/ retrodição: (cena_t, ação_tomada, efeito_kind)
+            self._buffer.append((self._prev_scene, self._last_key, actual.kind))
             if level_up:
                 self._novelty.record_goal_anchor(state_signature(self._prev_scene))
                 self._goal = None                     # nível cumprido → re-planejar
@@ -130,7 +137,8 @@ class CausalObjectAgent(Agent):
             code_srcs = [g["source"] for g in goals if g.get("type") == "code"]
             if code_srcs:
                 best = rank_candidates(code_srcs, scene, self._model,
-                                       self._tmodel, self._novelty, moves)
+                                       self._tmodel, self._novelty, moves,
+                                       buffer=self._buffer, available=avail)
                 self._goal = ({"type": "code", "source": best} if best
                               else (goals[0] if goals else None))
             else:
@@ -178,6 +186,7 @@ class CausalObjectAgent(Agent):
             "predicted": None if predicted is None else predicted.kind,
             "confidence": round(conf, 3), "model": self._model.stats(),
             "novelty_yield": round(self._novelty.yield_estimate(cand.key), 3),
+            "percept_mode": self._percept.mode(),
         }
         # guarda o registro (sem `actual`); será logado quando o efeito for observado
         self._pending_log = {

@@ -9,7 +9,7 @@ COMP_REPO = "/kaggle/input/competitions/arc-prize-2026-arc-agi-3/ARC-AGI-3-Agent
 
 MODULES = [
     "__init__.py", "agent.py", "causal_model.py", "hud.py",
-    "instrumentation.py", "novelty.py", "perception.py", "policy.py",
+    "instrumentation.py", "novelty.py", "perception.py", "perception_strategy.py", "policy.py",
     "transfer.py", "planning.py", "navigate.py", "llm.py", "sandbox.py", "dsl.py", "ranker.py",
 ]
 
