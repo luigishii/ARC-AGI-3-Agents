@@ -20,6 +20,7 @@ from .llm import make_llm_client, build_prompt, parse_goal, execute_goal
 from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
+from .iw import iw_plan
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
@@ -81,6 +82,7 @@ class CausalObjectAgent(Agent):
         self._typed = TypedWorldModel()
         self._eta_on = os.environ.get("CAUSAL_ETA", "0") != "0"
         self._typed_on = os.environ.get("CAUSAL_TYPED", "0") != "0"
+        self._iw_on = os.environ.get("CAUSAL_IW", "0") != "0"
         self._since_type = 0
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
@@ -189,6 +191,10 @@ class CausalObjectAgent(Agent):
             nk = navigate(scene, self._move)
             if nk is not None:
                 cand = keymap.get(nk)
+        if cand is None and self._iw_on and cands:
+            ik = self._iw_decide(scene, cands)     # IW sobre o TypedWorldModel (f_τ)
+            if ik is not None:
+                cand = keymap.get(ik)
         if cand is None and self._plan_on and cands:
             planned = plan(state_signature(scene), [c.key for c in cands],
                            self._tmodel, self._novelty, self._novelty.goal_anchors)
@@ -256,6 +262,15 @@ class CausalObjectAgent(Agent):
                         "context": {}, "after": _obj_state(o)})
             if len(buf) > TYPE_BUF_MAX:
                 buf.pop(0)
+
+    def _iw_decide(self, scene, cands):
+        """Planeja com Iterated Width sobre o TypedWorldModel (regras f_τ aceitas).
+        Sem regras aceitas → None (cai no fallback). Goal ainda não disponível (falta
+        reward_function) → modo exploração width-based."""
+        if not self._typed.sources:
+            return None
+        start = [(o.shape_hash, _obj_state(o)) for o in scene.objects]
+        return iw_plan(start, [c.key for c in cands], self._typed, max_nodes=300)
 
     def _eta_bonus(self, key) -> float:
         # η = ontology_error(0, effect_entropy) = incerteza de efeito da linha (τ,key).
