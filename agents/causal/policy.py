@@ -8,6 +8,20 @@ from arcengine import GameAction
 
 Candidate = namedtuple("Candidate", "action x y key")
 
+GRID_N = 6
+
+
+def cell_center(gx: int, gy: int) -> tuple[int, int]:
+    x = int((gx + 0.5) * 64 / GRID_N)
+    y = int((gy + 0.5) * 64 / GRID_N)
+    return x, y
+
+
+def cell_of(x: int, y: int) -> tuple[int, int]:
+    gx = min(GRID_N - 1, int(x) * GRID_N // 64)
+    gy = min(GRID_N - 1, int(y) * GRID_N // 64)
+    return gx, gy
+
 
 def _as_action(a):
     # available_actions pode vir como int (id) ou GameAction. Normaliza p/ GameAction.
