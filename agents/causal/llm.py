@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections import Counter
 
 GOAL_TYPES = {"press", "click_cell", "reach", "code"}
@@ -71,19 +72,21 @@ class HFClient(LLMClient):
             self._model = AutoModelForCausalLM.from_pretrained(
                 model_path, dtype=torch.float16, device_map="auto")   # transformers 5.x: dtype
         self._max = max_tokens
+        self._gen_lock = threading.Lock()   # serializa generate entre threads do Swarm
 
     def complete(self, prompt: str) -> str:
         import torch
-        enc = self._tok.apply_chat_template(
-            [{"role": "user", "content": prompt}],
-            add_generation_prompt=True, return_tensors="pt")
-        ids = enc.input_ids if hasattr(enc, "input_ids") else enc   # 5.x: dict -> tensor
-        ids = ids.to(self._model.device)
-        attn = torch.ones_like(ids)                                 # evita warning pad==eos
-        with torch.no_grad():
-            out = self._model.generate(ids, attention_mask=attn,
-                                       max_new_tokens=self._max, do_sample=False)
-        return self._tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)
+        with self._gen_lock:                # model.generate não é thread-safe concorrente
+            enc = self._tok.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                add_generation_prompt=True, return_tensors="pt")
+            ids = enc.input_ids if hasattr(enc, "input_ids") else enc   # 5.x: dict -> tensor
+            ids = ids.to(self._model.device)
+            attn = torch.ones_like(ids)                                 # evita warning pad==eos
+            with torch.no_grad():
+                out = self._model.generate(ids, attention_mask=attn,
+                                           max_new_tokens=self._max, do_sample=False)
+            return self._tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)
 
 
 def make_llm_client(model_path=None) -> LLMClient:
@@ -98,6 +101,22 @@ def make_llm_client(model_path=None) -> LLMClient:
         except Exception:
             pass
     return NullLLMClient()
+
+
+_SHARED_LLM = None
+_SHARED_KEY = "\0"
+_SHARED_LLM_LOCK = threading.Lock()
+
+
+def shared_llm_client(model_path=None) -> LLMClient:
+    """Singleton por-processo: carrega o modelo UMA vez, compartilhado por todas as
+    threads do Swarm. Sem isso, cada agente carregava seu próprio 7B → OOM → NullLLMClient."""
+    global _SHARED_LLM, _SHARED_KEY
+    with _SHARED_LLM_LOCK:
+        if _SHARED_LLM is None or _SHARED_KEY != model_path:
+            _SHARED_LLM = make_llm_client(model_path)
+            _SHARED_KEY = model_path
+        return _SHARED_LLM
 
 
 def client_kind(client) -> str:
