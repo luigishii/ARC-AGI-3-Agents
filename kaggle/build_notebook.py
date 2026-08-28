@@ -17,7 +17,7 @@ MODULES = [
 # Caminho do dataset de pesos do LLM no Kaggle. O usuário anexa o dataset ao
 # notebook e edita este valor para o slug do seu dataset, depois regenera o
 # notebook (uv run python kaggle/build_notebook.py).
-MODEL_DATASET_PATH = "/kaggle/input/qwen2-5-coder-7b-instruct"
+MODEL_DATASET_PATH = "/kaggle/input/models/qwen-lm/qwen2.5-coder/transformers/7b-instruct/1"
 
 TRIMMED_INIT = (
     "from typing import Type\n"

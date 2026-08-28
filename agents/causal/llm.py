@@ -48,27 +48,41 @@ class VLLMClient(LLMClient):
 
 
 class HFClient(LLMClient):
-    """Fallback: transformers + bitsandbytes (4-bit). Import lazy."""
+    """Fallback: transformers. Tenta bitsandbytes 4-bit; se ausente, carrega FP16.
+    Desliga torchvision (o image_utils do transformers 5.x quebra com o PIL/torchvision
+    da imagem Kaggle: 'cannot import name _Ink'). Import lazy → llm.py fica offline-safe."""
 
     def __init__(self, model_path, max_tokens: int = 256):
+        import transformers.utils as _tu
+        import transformers.utils.import_utils as _iu
+        _tu.is_torchvision_available = lambda *a, **k: False   # pula torchvision quebrado
+        _iu.is_torchvision_available = lambda *a, **k: False
         import torch
-        from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                                   BitsAndBytesConfig)  # lazy
+        from transformers import AutoModelForCausalLM, AutoTokenizer  # lazy
         self._tok = AutoTokenizer.from_pretrained(model_path)
-        bnb = BitsAndBytesConfig(load_in_4bit=True,
-                                 bnb_4bit_compute_dtype=torch.float16)
-        self._model = AutoModelForCausalLM.from_pretrained(
-            model_path, quantization_config=bnb, device_map="auto")
+        try:
+            from transformers import BitsAndBytesConfig
+            import bitsandbytes  # noqa: F401 — só usa 4-bit se a lib existir
+            bnb = BitsAndBytesConfig(load_in_4bit=True,
+                                     bnb_4bit_compute_dtype=torch.float16)
+            self._model = AutoModelForCausalLM.from_pretrained(
+                model_path, quantization_config=bnb, device_map="auto")
+        except Exception:
+            self._model = AutoModelForCausalLM.from_pretrained(
+                model_path, dtype=torch.float16, device_map="auto")   # transformers 5.x: dtype
         self._max = max_tokens
 
     def complete(self, prompt: str) -> str:
         import torch
-        ids = self._tok.apply_chat_template(
+        enc = self._tok.apply_chat_template(
             [{"role": "user", "content": prompt}],
-            add_generation_prompt=True, return_tensors="pt").to(self._model.device)
+            add_generation_prompt=True, return_tensors="pt")
+        ids = enc.input_ids if hasattr(enc, "input_ids") else enc   # 5.x: dict -> tensor
+        ids = ids.to(self._model.device)
+        attn = torch.ones_like(ids)                                 # evita warning pad==eos
         with torch.no_grad():
-            out = self._model.generate(ids, max_new_tokens=self._max,
-                                       do_sample=False)
+            out = self._model.generate(ids, attention_mask=attn,
+                                       max_new_tokens=self._max, do_sample=False)
         return self._tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)
 
 
