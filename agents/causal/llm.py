@@ -77,9 +77,14 @@ class HFClient(LLMClient):
     def complete(self, prompt: str) -> str:
         import torch
         with self._gen_lock:                # model.generate não é thread-safe concorrente
-            enc = self._tok.apply_chat_template(
-                [{"role": "user", "content": prompt}],
-                add_generation_prompt=True, return_tensors="pt")
+            msgs = [{"role": "user", "content": prompt}]
+            try:  # Qwen3 pensa por padrão (<think>…</think>) e gasta os tokens; desliga.
+                enc = self._tok.apply_chat_template(
+                    msgs, add_generation_prompt=True, return_tensors="pt",
+                    enable_thinking=False)
+            except TypeError:  # modelos sem esse kwarg (ex: Qwen2.5) ignoram e seguem
+                enc = self._tok.apply_chat_template(
+                    msgs, add_generation_prompt=True, return_tensors="pt")
             ids = enc.input_ids if hasattr(enc, "input_ids") else enc   # 5.x: dict -> tensor
             ids = ids.to(self._model.device)
             attn = torch.ones_like(ids)                                 # evita warning pad==eos
