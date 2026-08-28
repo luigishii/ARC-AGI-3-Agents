@@ -16,7 +16,7 @@ from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_
 from .planning import TransitionModel, plan
 from .navigate import MovementModel, navigate
 from .perception_strategy import PerceptionStrategy
-from .llm import make_llm_client, build_prompt, parse_goal, execute_goal, client_kind
+from .llm import shared_llm_client, build_prompt, parse_goal, execute_goal, client_kind
 from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
@@ -53,7 +53,7 @@ class CausalObjectAgent(Agent):
         self._tmodel = TransitionModel()
         self._move = MovementModel()
         self._nav_on = os.environ.get("CAUSAL_NAV", "1") != "0"
-        self._llm = make_llm_client(os.environ.get("QWEN_MODEL_PATH"))
+        self._llm = shared_llm_client(os.environ.get("QWEN_MODEL_PATH"))
         self._llm_on = os.environ.get("CAUSAL_LLM", "0") != "0"
         self._n_samples = int(os.environ.get("CAUSAL_SAMPLES", "1"))
         self._llm_kind = client_kind(self._llm)
@@ -101,7 +101,14 @@ class CausalObjectAgent(Agent):
         if os.environ.get("CAUSAL_PRIOR_SAVE"):
             from .transfer import save_prior
             save_prior(self._prior, os.environ.get("CAUSAL_PRIOR", DEFAULT_PRIOR_PATH))
-        print(f"[causal] phase2 stats: {self.phase2_stats()}")   # B: diagnóstico no log
+        stats = self.phase2_stats()
+        print(f"[causal] phase2 stats: {stats}")   # B: diagnóstico no log
+        try:                                        # e no OUTPUT (logs do rerun são ocultos)
+            import json as _json
+            with open("/kaggle/working/causal_phase2.json", "w") as _f:
+                _json.dump(stats, _f)
+        except Exception:
+            pass
         super().cleanup(scorecard)
 
     def choose_action(
