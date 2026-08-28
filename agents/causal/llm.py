@@ -37,7 +37,7 @@ class NullLLMClient(LLMClient):
 class VLLMClient(LLMClient):
     """Serving via vLLM (primário). Import lazy — llm.py fica offline-safe."""
 
-    def __init__(self, model_path, max_tokens: int = 256):
+    def __init__(self, model_path, max_tokens: int = 512):
         from vllm import LLM, SamplingParams  # lazy
         self._llm = LLM(model=model_path, dtype="float16",
                         gpu_memory_utilization=0.9)
@@ -53,7 +53,7 @@ class HFClient(LLMClient):
     Desliga torchvision (o image_utils do transformers 5.x quebra com o PIL/torchvision
     da imagem Kaggle: 'cannot import name _Ink'). Import lazy → llm.py fica offline-safe."""
 
-    def __init__(self, model_path, max_tokens: int = 256):
+    def __init__(self, model_path, max_tokens: int = 512):
         import transformers.utils as _tu
         import transformers.utils.import_utils as _iu
         _tu.is_torchvision_available = lambda *a, **k: False   # pula torchvision quebrado
