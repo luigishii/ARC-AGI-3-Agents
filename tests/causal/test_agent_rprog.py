@@ -73,3 +73,36 @@ def test_phase2_stats_rprog_keys(monkeypatch):
     s = a.phase2_stats()
     assert s["rprog_actions"] == 1     # só ACTION6 tem média > 0
     assert s["rprog_fires"] == 7
+
+
+from agents.causal.policy import Candidate
+
+
+def _cands(*keys):
+    return [Candidate(None, None, None, k, False) for k in keys]
+
+
+# --- escolhe a key de maior Δ médio positivo e incrementa rprog_fires ---
+def test_rprog_decide_picks_best_positive(monkeypatch):
+    a = _agent(monkeypatch, CAUSAL_RPROG="1")
+    a._rprog = {"ACTION6": [30.0, 3], "ACTION1": [4.0, 2]}   # médias 10 vs 2
+    out = a._rprog_decide(_cands("ACTION1", "ACTION6"))
+    assert out == "ACTION6"
+    assert a._rprog_fires == 1
+
+
+# --- nenhuma média positiva → None, rprog_fires inalterado ---
+def test_rprog_decide_none_when_no_positive(monkeypatch):
+    a = _agent(monkeypatch, CAUSAL_RPROG="1")
+    a._rprog = {"ACTION1": [-6.0, 2]}
+    out = a._rprog_decide(_cands("ACTION1"))
+    assert out is None
+    assert a._rprog_fires == 0
+
+
+# --- sem dados para os cands → None ---
+def test_rprog_decide_none_when_no_data(monkeypatch):
+    a = _agent(monkeypatch, CAUSAL_RPROG="1")
+    out = a._rprog_decide(_cands("ACTION1", "ACTION2"))
+    assert out is None
+    assert a._rprog_fires == 0

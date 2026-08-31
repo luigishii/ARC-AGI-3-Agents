@@ -237,6 +237,10 @@ class CausalObjectAgent(Agent):
             nk = navigate(scene, self._move)
             if nk is not None:
                 cand = keymap.get(nk)
+        if cand is None and self._rprog_on and cands:
+            rk = self._rprog_decide(cands)    # B′: progresso model-free por reward real
+            if rk is not None:
+                cand = keymap.get(rk)
         if cand is None and self._iw_on and cands:
             ik = self._iw_decide(scene, cands)     # IW sobre o TypedWorldModel (f_τ)
             if ik is not None:
