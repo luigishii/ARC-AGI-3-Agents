@@ -2,6 +2,7 @@
 # de-blinding). Roda o agente completo (Qwen3-32B + flags) contra o Arcade OFFLINE
 # no EDITOR do Kaggle (RTX Pro 6000, internet OFF), com logs visiveis. Reusa as pecas
 # do build_notebook.py (DRY): so muda o .env (offline, sem chave) e as cells de run.
+import base64
 import json
 import os
 import sys
@@ -29,6 +30,10 @@ OFFLINE_ENV = (
 
 
 def build_offline_notebook(sources):
+    # Embarca o main.py corrigido (offline: lista jogos via Arcade local em vez de
+    # HTTP). O copytree traz o main.py da competicao; nossos FILES o sobrescrevem.
+    with open(os.path.join(_repo_root(), "main.py"), "rb") as f:
+        sources = {**sources, "main.py": base64.b64encode(f.read()).decode()}
     cell0 = "!pip install --no-index --find-links %s arc-agi python-dotenv\n" % WHEELS
     cell1 = (
         "import os, shutil, base64, glob\n"

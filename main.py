@@ -39,6 +39,41 @@ HEADERS = {
 }
 
 
+def fetch_full_games(root_url: str, headers: dict) -> list:
+    """Lista de jogos disponiveis.
+
+    OFFLINE (OPERATION_MODE=offline): vem do Arcade local via get_environments()
+    — sem internet. Caso contrario: HTTP GET {root_url}/api/games.
+    """
+    if os.environ.get("OPERATION_MODE", "").lower() == "offline":
+        from arc_agi import Arcade, OperationMode
+
+        arc = Arcade(operation_mode=OperationMode.OFFLINE)
+        games = [e.game_id for e in arc.get_environments()]
+        logger.info(f"OFFLINE game list from Arcade: {games}")
+        return games
+
+    full_games: list = []
+    try:
+        with requests.Session() as session:
+            session.headers.update(headers)
+            r = session.get(f"{root_url}/api/games", timeout=10)
+
+        if r.status_code == 200:
+            try:
+                full_games = [g["game_id"] for g in r.json()]
+            except (ValueError, KeyError) as e:
+                logger.error(f"Failed to parse games response: {e}")
+                logger.error(f"Response content: {r.text[:200]}")
+        else:
+            logger.error(
+                f"API request failed with status {r.status_code}: {r.text[:200]}"
+            )
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to connect to API server: {e}")
+    return full_games
+
+
 def run_agent(swarm: Swarm) -> None:
     swarm.main()
     os.kill(os.getpid(), signal.SIGINT)
@@ -116,26 +151,8 @@ def main() -> None:
 
     print(f"{ROOT_URL}/api/games")
 
-    # Get the list of games from the API
-    full_games = []
-    try:
-        with requests.Session() as session:
-            session.headers.update(HEADERS)
-            r = session.get(f"{ROOT_URL}/api/games", timeout=10)
-
-        if r.status_code == 200:
-            try:
-                full_games = [g["game_id"] for g in r.json()]
-            except (ValueError, KeyError) as e:
-                logger.error(f"Failed to parse games response: {e}")
-                logger.error(f"Response content: {r.text[:200]}")
-        else:
-            logger.error(
-                f"API request failed with status {r.status_code}: {r.text[:200]}"
-            )
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to connect to API server: {e}")
+    # Get the list of games (offline: Arcade local; online: HTTP API)
+    full_games = fetch_full_games(ROOT_URL, HEADERS)
 
     # For playback agents, we can derive the game from the recording filename
     if not full_games and args.agent and args.agent.endswith(".recording.jsonl"):
