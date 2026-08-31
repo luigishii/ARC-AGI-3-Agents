@@ -114,15 +114,19 @@ class CausalObjectAgent(Agent):
     def choose_action(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
-        if latest_frame.state in (GameState.NOT_PLAYED, GameState.GAME_OVER) or getattr(
-            latest_frame, "full_reset", False
-        ):
+        # full_reset sinaliza que o ambiente ja se resetou -> limpa a memoria interna,
+        # mas NAO re-envia RESET (offline o jogo devolve full_reset=True em toda resposta
+        # de RESET; re-resetar geraria loop infinito). RESET de verdade so quando o jogo
+        # nao esta jogavel (NOT_PLAYED / GAME_OVER).
+        need_reset = latest_frame.state in (GameState.NOT_PLAYED, GameState.GAME_OVER)
+        if need_reset or getattr(latest_frame, "full_reset", False):
             self._prev_scene = None
             self._last_key = None
             self._pending_log = None
             self._hud = HudMask()
             self._prev_grid = None
-            return GameAction.RESET
+            if need_reset:
+                return GameAction.RESET
 
         grid = to_grid(latest_frame.frame)
         if self._prev_grid is not None:
