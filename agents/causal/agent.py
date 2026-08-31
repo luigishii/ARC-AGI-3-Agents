@@ -1,4 +1,5 @@
 import os
+import math
 from collections import deque
 from typing import Any
 
@@ -97,6 +98,9 @@ class CausalObjectAgent(Agent):
         self._iw_goal_hits = 0        # diag: IW achou caminho até a meta
         self._reward_real_true = 0    # diag: reward_fn deu goal_flag=True em cena real
         self._reward_real_evals = 0   # diag: cenas reais avaliadas pela reward_fn
+        self._rprog = {}              # action_key -> [soma_Δ, contagem] (progresso model-free)
+        self._rprog_fires = 0         # diag: vezes que a camada rprog escolheu a ação
+        self._rprog_on = os.environ.get("CAUSAL_RPROG", "0") != "0"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -157,6 +161,7 @@ class CausalObjectAgent(Agent):
                 # transição DECISÃO→DECISÃO: alimenta retrodição + f_τ/η + movimento + forward
                 self._buffer.append((self._prev_scene, self._last_key, actual.kind))
                 self._observe_types(self._prev_scene, scene, self._last_key)
+                self._track_rprog(scene)          # B′: delta de reward real por ação
                 self._novelty.observe_transition(self._last_key, scene)
                 self._move.observe(self._last_key, self._prev_scene, scene)
                 cur_sig = state_signature(scene)
@@ -329,6 +334,35 @@ class CausalObjectAgent(Agent):
         if goal_fn_from_reward(self._reward_fn)(state):
             self._reward_real_true += 1
 
+    def _track_rprog(self, scene):
+        """B′: acumula Δ do reward REAL (depois-antes) por action_key. Model-free —
+        contorna o f_τ que não simula a variável do reward. Só decisão→decisão."""
+        if self._reward_fn is None or self._last_key is None or self._prev_scene is None:
+            return
+        vf = value_fn_from_reward(self._reward_fn)
+        before = [(o.shape_hash, _obj_state(o)) for o in self._prev_scene.objects]
+        after = [(o.shape_hash, _obj_state(o)) for o in scene.objects]
+        vb, va = vf(before), vf(after)
+        if not (math.isfinite(vb) and math.isfinite(va)):
+            return
+        row = self._rprog.setdefault(self._last_key, [0.0, 0])
+        row[0] += va - vb
+        row[1] += 1
+
+    def _rprog_decide(self, cands):
+        """B′: escolhe a ação de maior Δ médio de reward real (>0). Sem dados/positivo → None."""
+        best_key, best_avg = None, 0.0
+        for c in cands:
+            row = self._rprog.get(c.key)
+            if not row or row[1] == 0:
+                continue
+            avg = row[0] / row[1]
+            if avg > best_avg:
+                best_avg, best_key = avg, c.key
+        if best_key is not None:
+            self._rprog_fires += 1
+        return best_key
+
     def _eta_bonus(self, key) -> float:
         # η = ontology_error(0, effect_entropy) = incerteza de efeito da linha (τ,key).
         # (type_entropy=0 até existir um classificador de tipos — só then η fica completo.)
@@ -404,6 +438,8 @@ class CausalObjectAgent(Agent):
             "iw_goal_hits": self._iw_goal_hits,
             "reward_real_true": self._reward_real_true,
             "reward_real_evals": self._reward_real_evals,
+            "rprog_actions": sum(1 for r in self._rprog.values() if r[1] and r[0] / r[1] > 0),
+            "rprog_fires": self._rprog_fires,
             "eta_rows": len(self._etable.rows),
         }
 
