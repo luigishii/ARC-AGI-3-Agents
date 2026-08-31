@@ -105,6 +105,10 @@ class CausalObjectAgent(Agent):
         self._rprog_on = os.environ.get("CAUSAL_RPROG", "0") != "0"
         self._cover = {}              # action_key -> nº de vezes tomada (exploração por cobertura)
         self._cover_on = os.environ.get("CAUSAL_COVER", "0") != "0"
+        self._fix_run = 0             # repetições consecutivas da MESMA key escolhida
+        self._fix_breaks = 0          # diag: vezes que o guarda quebrou uma fixação
+        self._fix_on = os.environ.get("CAUSAL_FIX", "0") != "0"
+        self._fix_k = int(os.environ.get("CAUSAL_FIX_K", "3"))
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -271,6 +275,7 @@ class CausalObjectAgent(Agent):
         if cand is None:
             self._pending_log = None
             return GameAction.RESET
+        cand = self._antifix(cand, cands, keymap)   # guarda global anti-fixação
         action = cand.action
         if action.is_complex():
             action.set_data({"x": cand.x, "y": cand.y})
@@ -390,6 +395,22 @@ class CausalObjectAgent(Agent):
                     1 if c.key == self._last_key else 0)
         return min(cands, key=rank).key
 
+    def _antifix(self, cand, cands, keymap):
+        """Guarda GLOBAL anti-fixação: se a mesma key repete >= FIX_K vezes, sobrepõe a
+        decisão por uma escolha de cobertura (menos-visitada) EXCLUINDO a key fixada.
+        Pega fixação venha de qual camada da pilha for."""
+        if cand.key == self._last_key:
+            self._fix_run += 1
+        else:
+            self._fix_run = 0
+        if self._fix_on and self._fix_run >= self._fix_k and cands:
+            alt = [c for c in cands if c.key != cand.key]
+            if alt:
+                cand = keymap.get(self._cover_decide(alt), cand)
+                self._fix_breaks += 1
+                self._fix_run = 0
+        return cand
+
     def _eta_bonus(self, key) -> float:
         # η = ontology_error(0, effect_entropy) = incerteza de efeito da linha (τ,key).
         # (type_entropy=0 até existir um classificador de tipos — só then η fica completo.)
@@ -483,6 +504,7 @@ class CausalObjectAgent(Agent):
             "reward_src": self._reward_src,
             "reward_rejected": self._reward_rejected,
             "cover_keys": len(self._cover),
+            "fix_breaks": self._fix_breaks,
             "iw_goal_calls": self._iw_goal_calls,
             "iw_goal_hits": self._iw_goal_hits,
             "reward_real_true": self._reward_real_true,
