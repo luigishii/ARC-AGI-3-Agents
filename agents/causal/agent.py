@@ -39,6 +39,36 @@ def _obj_state(o) -> dict:
             "color": int(o.color), "shape": o.shape_hash}
 
 
+def _spatial_context(objects) -> str:
+    """Bloco textual com posição (x,y), distâncias par-a-par (Manhattan) e resumo de
+    grid 3x3 dos objetos — pro prompt de síntese de reward enxergar estrutura espacial
+    (não só cor). x=col, y=row (mesma convenção de _obj_state)."""
+    objs = list(objects)[:8]
+    pts = [(int(round(o.centroid[1])), int(round(o.centroid[0]))) for o in objs]
+    lines = ["OBJETOS (x=col, y=row):"]
+    for i, o in enumerate(objs):
+        lines.append(f"  id={i} color={int(o.color)} x={pts[i][0]} y={pts[i][1]} size={o.size}")
+    pairs = []
+    for i in range(len(objs)):
+        for j in range(i + 1, len(objs)):
+            d = abs(pts[i][0] - pts[j][0]) + abs(pts[i][1] - pts[j][1])
+            pairs.append((d, i, j))
+    if pairs:
+        lines.append("DISTANCIAS (Manhattan):")
+        for d, i, j in pairs[:10]:
+            lines.append(f"  d(id{i},id{j})={d}")
+    G = 3
+    cell = {}
+    for i, o in enumerate(objs):
+        gx = min(pts[i][0] * G // 64, G - 1)
+        gy = min(pts[i][1] * G // 64, G - 1)
+        cell.setdefault((gy, gx), int(o.color))
+    lines.append("GRID 3x3 (cor do objeto por celula, '.'=vazio):")
+    for gy in range(G):
+        lines.append("  " + " ".join(str(cell.get((gy, gx), ".")) for gx in range(G)))
+    return "\n".join(lines)
+
+
 class CausalObjectAgent(Agent):
     """Agente objeto-cêntrico causal (v1). Ver docs/superpowers/specs/2026-08-27-causal-object-agent-design.md."""
 
@@ -449,14 +479,32 @@ class CausalObjectAgent(Agent):
         return "\n".join(lines)
 
     def _build_reward_prompt(self, scene) -> str:
-        objs = ", ".join(f"(color={o.color},size={o.size})" for o in scene.objects[:8])
-        return ("Infira reward_function(state) que retorna (reward, goal_flag). REGRAS: "
-                "(1) reward é um número GRADUADO — maior = mais perto de resolver, NÃO use só 0/1; "
-                "(2) NÃO hardcode tamanhos/posições exatos (magic numbers) — use relações/contagens; "
-                "(3) goal_flag=True SÓ quando o nível está realmente resolvido (raro). "
-                "Olhe SÓ o state (lista de (tipo,{x,y,color,size,...})). "
-                f"OBJETOS atuais: {objs}. "
-                'Responda SÓ JSON {"type":"code","source":"def reward_function(state): ..."}')
+        ctx = _spatial_context(scene.objects)
+        return (
+            "Infira reward_function(state) que retorna (reward, goal_flag). REGRAS: "
+            "(1) reward é um número GRADUADO — maior = mais perto de resolver, NÃO use só 0/1; "
+            "(2) NÃO hardcode tamanhos/posições exatos (magic numbers) — use relações/distâncias; "
+            "(3) goal_flag=True SÓ quando o nível está realmente resolvido (raro). "
+            "A META costuma ser ESPACIAL: aproximar/alinhar um objeto de um alvo, ou casar um "
+            "arranjo de células — use POSIÇÃO (x,y) e DISTÂNCIAS, não contagem de cor. "
+            "O state é lista de (tipo,{x,y,color,shape}); x=col, y=row.\n"
+            f"{ctx}\n"
+            "EXEMPLOS (reward espacial, só usam o state, sem import):\n"
+            "  # distancia: objeto[0] se aproxima do alvo mais proximo\n"
+            "  def reward_function(state):\n"
+            "      pts=[b for _,b in state]\n"
+            "      if len(pts)<2: return (0.0, False)\n"
+            "      a=pts[0]\n"
+            "      d=min(abs(a['x']-b['x'])+abs(a['y']-b['y']) for b in pts[1:])\n"
+            "      return (-float(d), d==0)\n"
+            "  # arranjo: quantos objetos alinhados na mesma linha (y) do alvo\n"
+            "  def reward_function(state):\n"
+            "      pts=[b for _,b in state]\n"
+            "      if not pts: return (0.0, False)\n"
+            "      ys=[b['y'] for b in pts]\n"
+            "      return (float(sum(1 for y in ys if y==ys[0])), False)\n"
+            'Responda SÓ JSON {"type":"code","source":"def reward_function(state): ..."}'
+        )
 
     def _try_learn_reward(self, scene) -> bool:
         """A: sintetiza a reward via LLM e ACEITA a 1ª que passa o check estático
