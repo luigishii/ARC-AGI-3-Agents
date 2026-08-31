@@ -29,12 +29,10 @@ OFFLINE_ENV = (
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
-# Gargalo #2: cada jogo roda num subprocesso novo que recarrega o 32B (61GB); na troca
-# de jogo a GPU do processo anterior nao libera a tempo e o load do proximo TRAVA.
-# Por isso o padrao roda 1 JOGO por execucao do notebook (sem travar). Pra ver outro
-# jogo: edite OFFLINE_GAME_PREFIX (ex: 'vc33') e re-rode a celula — ou aumente o limite.
-OFFLINE_GAME_LIMIT = 1      # nº de jogos por execução do notebook
-OFFLINE_GAME_PREFIX = ""    # "" = começa do 1º jogo; ex: "vc33" roda a partir do vc33
+# Gargalo #2 RESOLVIDO p/ de-blinding: em vez de 1 subprocesso por jogo (recarrega o 32B
+# 61GB a cada troca e TRAVA), roda UMA chamada de main.py sem --game → o modelo é singleton
+# por processo, carrega 1x e joga o subconjunto OFFLINE_GAMES no MESMO processo.
+OFFLINE_GAMES = "sk48,vc33,ls20,tn36"   # "" = TODOS os 25; ex: "vc33,ls20" (prefixos)
 
 
 def build_offline_notebook(sources):
@@ -69,15 +67,13 @@ def build_offline_notebook(sources):
         "envs = arc.get_environments()\n"
         "games = [e.game_id for e in envs]\n"
         "print('jogos jogaveis:', games)\n"
-        "# >>> EDITE AQUI p/ escolher o jogo (evita o reload do 32B travar na troca) <<<\n"
-        f"OFFLINE_GAME_LIMIT = {OFFLINE_GAME_LIMIT}   # nº de jogos por execução\n"
-        f"OFFLINE_GAME_PREFIX = {OFFLINE_GAME_PREFIX!r}  # '' = 1º jogo; ex: 'vc33'\n"
-        "sel = [g for g in games if g.startswith(OFFLINE_GAME_PREFIX)] if OFFLINE_GAME_PREFIX else games\n"
-        "sel = sel[:OFFLINE_GAME_LIMIT]\n"
-        "print('rodando (limite %d, prefixo %r):' % (OFFLINE_GAME_LIMIT, OFFLINE_GAME_PREFIX), sel)\n"
-        f"for g in sel:\n"
-        f"    print('=== jogando', g, '===')\n"
-        f"    os.system('cd {REPO} && MPLBACKEND=agg python main.py --agent causalobject --game ' + g)\n"
+        "# >>> EDITE AQUI: quais jogos rodar. '' = TODOS os 25. Ex: 'vc33,ls20,tn36' <<<\n"
+        "# O 32B carrega UMA vez e joga o subconjunto no MESMO processo (sem reload/trava).\n"
+        f"OFFLINE_GAMES = {OFFLINE_GAMES!r}\n"
+        f"with open({REPO!r} + '/.env', 'a') as f:\n"
+        "    f.write('OFFLINE_GAMES=' + OFFLINE_GAMES + '\\n')\n"
+        "print('rodando OFFLINE_GAMES=%r (1 processo, 32B 1x)' % OFFLINE_GAMES)\n"
+        f"os.system('cd {REPO} && MPLBACKEND=agg python main.py --agent causalobject')\n"
     )
     cell2 = (
         "import glob\n"

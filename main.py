@@ -51,6 +51,13 @@ def fetch_full_games(root_url: str, headers: dict) -> list:
         arc = Arcade(operation_mode=OperationMode.OFFLINE)
         games = [e.game_id for e in arc.get_environments()]
         logger.info(f"OFFLINE game list from Arcade: {games}")
+        # Filtro opcional p/ de-blinding: OFFLINE_GAMES="vc33,ls20" roda só esses num
+        # ÚNICO processo (32B carrega 1x, joga o subconjunto) — mata o gargalo #2.
+        sel = os.environ.get("OFFLINE_GAMES", "").strip()
+        if sel:
+            prefixes = [p.strip() for p in sel.split(",") if p.strip()]
+            games = [g for g in games if any(g.startswith(p) for p in prefixes)]
+            logger.info(f"OFFLINE_GAMES filtrou para: {games}")
         return games
 
     full_games: list = []

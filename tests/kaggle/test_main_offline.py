@@ -55,3 +55,22 @@ def test_online_still_uses_http(monkeypatch):
     monkeypatch.setattr(m.requests, "Session", lambda *a, **k: _Sess())
     games = m.fetch_full_games("http://gateway:8001", {})
     assert games == ["vc33-abc", "ls20-def"]
+
+
+def test_offline_games_filter(monkeypatch):
+    m = _load_main()
+    monkeypatch.setenv("OPERATION_MODE", "offline")
+    monkeypatch.setenv("OFFLINE_GAMES", "vc33,ls20")
+
+    class _Env:
+        def __init__(self, gid): self.game_id = gid
+    class _Arc:
+        def __init__(self, *a, **k): pass
+        def get_environments(self):
+            return [_Env("sk48-d80"), _Env("vc33-543"), _Env("ls20-960"), _Env("tn36-ef4")]
+    import arc_agi
+    monkeypatch.setattr(arc_agi, "Arcade", _Arc, raising=False)
+    monkeypatch.setattr(arc_agi, "OperationMode", type("OM", (), {"OFFLINE": 1}), raising=False)
+
+    out = m.fetch_full_games("http://x", {})
+    assert out == ["vc33-543", "ls20-960"]     # só os prefixos pedidos

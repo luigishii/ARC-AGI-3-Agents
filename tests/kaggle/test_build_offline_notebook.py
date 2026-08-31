@@ -87,15 +87,16 @@ def test_offline_env_has_rprog():
     assert "CAUSAL_RPROG=1" in b.OFFLINE_ENV
 
 
-def test_offline_runs_single_game_by_default():
+def test_offline_runs_subset_in_one_process():
     import kaggle.build_offline_notebook as b
-    assert b.OFFLINE_GAME_LIMIT == 1
+    assert isinstance(b.OFFLINE_GAMES, str)              # subconjunto configurável
     src = b.read_sources(b._repo_root())
     nb = b.build_offline_notebook(src)
     text = "".join(
         "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
         for c in nb["cells"]
     )
-    assert "sel = sel[:OFFLINE_GAME_LIMIT]" in text      # fatia a lista
-    assert "for g in sel:" in text                       # roda a fatia, não todos
-    assert "for g in games:" not in text                 # loop antigo (todos) removido
+    assert "OFFLINE_GAMES" in text                        # var editável na célula + .env
+    # UMA chamada de main.py sem --game (modelo 1x, joga o subconjunto in-process)
+    assert "python main.py --agent causalobject'" in text
+    assert "for g in sel:" not in text                   # sem loop por-jogo (reload)
