@@ -85,3 +85,17 @@ def test_patched_mainpy_embedded():
 def test_offline_env_has_rprog():
     import kaggle.build_offline_notebook as b
     assert "CAUSAL_RPROG=1" in b.OFFLINE_ENV
+
+
+def test_offline_runs_single_game_by_default():
+    import kaggle.build_offline_notebook as b
+    assert b.OFFLINE_GAME_LIMIT == 1
+    src = b.read_sources(b._repo_root())
+    nb = b.build_offline_notebook(src)
+    text = "".join(
+        "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
+        for c in nb["cells"]
+    )
+    assert "sel = sel[:OFFLINE_GAME_LIMIT]" in text      # fatia a lista
+    assert "for g in sel:" in text                       # roda a fatia, não todos
+    assert "for g in games:" not in text                 # loop antigo (todos) removido

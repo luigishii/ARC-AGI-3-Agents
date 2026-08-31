@@ -29,6 +29,13 @@ OFFLINE_ENV = (
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
+# Gargalo #2: cada jogo roda num subprocesso novo que recarrega o 32B (61GB); na troca
+# de jogo a GPU do processo anterior nao libera a tempo e o load do proximo TRAVA.
+# Por isso o padrao roda 1 JOGO por execucao do notebook (sem travar). Pra ver outro
+# jogo: edite OFFLINE_GAME_PREFIX (ex: 'vc33') e re-rode a celula — ou aumente o limite.
+OFFLINE_GAME_LIMIT = 1      # nº de jogos por execução do notebook
+OFFLINE_GAME_PREFIX = ""    # "" = começa do 1º jogo; ex: "vc33" roda a partir do vc33
+
 
 def build_offline_notebook(sources):
     # Embarca o main.py corrigido (offline: lista jogos via Arcade local em vez de
@@ -62,7 +69,13 @@ def build_offline_notebook(sources):
         "envs = arc.get_environments()\n"
         "games = [e.game_id for e in envs]\n"
         "print('jogos jogaveis:', games)\n"
-        f"for g in games:\n"
+        "# >>> EDITE AQUI p/ escolher o jogo (evita o reload do 32B travar na troca) <<<\n"
+        f"OFFLINE_GAME_LIMIT = {OFFLINE_GAME_LIMIT}   # nº de jogos por execução\n"
+        f"OFFLINE_GAME_PREFIX = {OFFLINE_GAME_PREFIX!r}  # '' = 1º jogo; ex: 'vc33'\n"
+        "sel = [g for g in games if g.startswith(OFFLINE_GAME_PREFIX)] if OFFLINE_GAME_PREFIX else games\n"
+        "sel = sel[:OFFLINE_GAME_LIMIT]\n"
+        "print('rodando (limite %d, prefixo %r):' % (OFFLINE_GAME_LIMIT, OFFLINE_GAME_PREFIX), sel)\n"
+        f"for g in sel:\n"
         f"    print('=== jogando', g, '===')\n"
         f"    os.system('cd {REPO} && MPLBACKEND=agg python main.py --agent causalobject --game ' + g)\n"
     )
