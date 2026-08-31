@@ -100,3 +100,8 @@ def test_offline_runs_subset_in_one_process():
     # UMA chamada de main.py sem --game (modelo 1x, joga o subconjunto in-process)
     assert "python main.py --agent causalobject'" in text
     assert "for g in sel:" not in text                   # sem loop por-jogo (reload)
+
+
+def test_offline_env_has_cover():
+    import kaggle.build_offline_notebook as b
+    assert "CAUSAL_COVER=1" in b.OFFLINE_ENV

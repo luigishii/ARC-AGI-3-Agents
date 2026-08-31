@@ -44,6 +44,7 @@ ENV = (
     "CAUSAL_ETA=1\n"         # exploração por erro de ontologia (η)
     "CAUSAL_IW=1\n"          # planner Iterated Width sobre o TypedWorldModel
     "CAUSAL_RPROG=1\n"       # progresso model-free por reward real (Lever B')
+    "CAUSAL_COVER=1\n"       # exploração por cobertura + anti-fixação
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 

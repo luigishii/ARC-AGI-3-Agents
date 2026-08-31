@@ -86,3 +86,8 @@ def test_main_writes_valid_ipynb(tmp_path, monkeypatch):
 def test_env_has_rprog():
     import kaggle.build_notebook as b
     assert "CAUSAL_RPROG=1" in b.ENV
+
+
+def test_env_has_cover():
+    import kaggle.build_notebook as b
+    assert "CAUSAL_COVER=1" in b.ENV
