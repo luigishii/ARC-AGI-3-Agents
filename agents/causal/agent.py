@@ -21,7 +21,7 @@ from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
 from .iw import iw_plan
-from .goals import compile_reward, static_reward_check, goal_fn_from_reward
+from .goals import compile_reward, static_reward_check, goal_fn_from_reward, value_fn_from_reward
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
@@ -306,16 +306,16 @@ class CausalObjectAgent(Agent):
 
     def _iw_decide(self, scene, cands):
         """Planeja com Iterated Width sobre o TypedWorldModel (regras f_τ aceitas).
-        Sem regras aceitas → None (cai no fallback). Goal ainda não disponível (falta
-        reward_function) → modo exploração width-based."""
+        Sem regras aceitas → None (cai no fallback). Com reward aprendida → best-first
+        que sobe o reward denso (value_fn); sem reward → exploração width-based."""
         if not self._typed.sources:
             return None
         start = [(o.shape_hash, _obj_state(o)) for o in scene.objects]
-        gf = goal_fn_from_reward(self._reward_fn) if self._reward_fn else None
-        r = iw_plan(start, [c.key for c in cands], self._typed, goal_fn=gf, max_nodes=300)
-        if gf is not None:                       # diag: IW goal-directed disparou
+        vf = value_fn_from_reward(self._reward_fn) if self._reward_fn else None
+        r = iw_plan(start, [c.key for c in cands], self._typed, value_fn=vf, max_nodes=300)
+        if vf is not None:                       # diag: IW value-directed disparou
             self._iw_goal_calls += 1
-            if r is not None:                    # achou caminho até a meta
+            if r is not None:                    # achou ação que melhora o valor
                 self._iw_goal_hits += 1
         return r
 
