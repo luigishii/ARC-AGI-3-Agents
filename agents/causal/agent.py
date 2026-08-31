@@ -22,7 +22,8 @@ from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
 from .iw import iw_plan
-from .goals import compile_reward, static_reward_check, goal_fn_from_reward, value_fn_from_reward
+from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
+                    value_fn_from_reward, accept_reward)
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
@@ -94,6 +95,7 @@ class CausalObjectAgent(Agent):
         self._since_type = 0
         self._reward_fn = None        # A: reward_function/predicado de meta (goal-directed IW)
         self._reward_src = None
+        self._reward_rejected = 0     # diag: rewards barradas pelo check comportamental
         self._iw_goal_calls = 0       # diag: IW rodou goal-directed (reward viva)
         self._iw_goal_hits = 0        # diag: IW achou caminho até a meta
         self._reward_real_true = 0    # diag: reward_fn deu goal_flag=True em cena real
@@ -406,28 +408,48 @@ class CausalObjectAgent(Agent):
 
     def _build_reward_prompt(self, scene) -> str:
         objs = ", ".join(f"(color={o.color},size={o.size})" for o in scene.objects[:8])
-        return ("Infira reward_function(state) que retorna (reward, goal_flag) — goal_flag=True "
-                "quando o NÍVEL está resolvido; olhe SÓ o state (lista de (tipo,{x,y,color,...})). "
+        return ("Infira reward_function(state) que retorna (reward, goal_flag). REGRAS: "
+                "(1) reward é um número GRADUADO — maior = mais perto de resolver, NÃO use só 0/1; "
+                "(2) NÃO hardcode tamanhos/posições exatos (magic numbers) — use relações/contagens; "
+                "(3) goal_flag=True SÓ quando o nível está realmente resolvido (raro). "
+                "Olhe SÓ o state (lista de (tipo,{x,y,color,size,...})). "
                 f"OBJETOS atuais: {objs}. "
                 'Responda SÓ JSON {"type":"code","source":"def reward_function(state): ..."}')
 
     def _try_learn_reward(self, scene) -> bool:
-        """A: sintetiza a reward_function/predicado de meta via LLM, valida pelo check
-        estático anti-trapaça (usa o state, sem estado global). Aceita → IW goal-directed."""
+        """A: sintetiza a reward via LLM e ACEITA a 1ª que passa o check estático
+        (anti-trapaça) E o comportamental (accept_reward: sem constante/sempre-True em
+        estados reais). Self-repair com o motivo da rejeição até CAUSAL_REPAIR vezes."""
         if self._reward_fn is not None:
             return False
-        self._llm_calls += 1
+        states = [[(o.shape_hash, _obj_state(o)) for o in sc.objects]
+                  for (sc, _k, _e) in self._buffer]
+        states.append([(o.shape_hash, _obj_state(o)) for o in scene.objects])
         prompt = self._build_reward_prompt(scene)
-        resps = (self._llm.complete_many(prompt, self._n_samples)
-                 if self._n_samples > 1 else [self._llm.complete(prompt)])
-        for r in resps:
-            g = parse_goal(r)
-            src = g.get("source") if g and g.get("type") == "code" else None
-            if src and static_reward_check(src):
-                self._reward_fn = compile_reward(src)
-                self._reward_src = src
-                return True
+        for _ in range(self._repair_max + 1):
+            self._llm_calls += 1
+            resps = (self._llm.complete_many(prompt, self._n_samples)
+                     if self._n_samples > 1 else [self._llm.complete(prompt)])
+            last_err = "sem resposta"
+            for r in resps:
+                g = parse_goal(r)
+                src = g.get("source") if g and g.get("type") == "code" else None
+                if not src or not static_reward_check(src):
+                    last_err = "não passa no check estático (usa o state? sem global?)"
+                    continue
+                ok, reason = accept_reward(src, states)
+                if ok:
+                    self._reward_fn = compile_reward(src)
+                    self._reward_src = src
+                    return True
+                self._reward_rejected += 1
+                last_err = reason
+            prompt = self._build_reward_repair_prompt(scene, last_err)
         return False
+
+    def _build_reward_repair_prompt(self, scene, err) -> str:
+        base = self._build_reward_prompt(scene)
+        return base + f"\nA tentativa anterior FOI REJEITADA: {err}. Corrija e responda SÓ o JSON."
 
     def phase2_stats(self) -> dict:
         """B: telemetria diagnosticável no log do Kaggle."""
@@ -438,6 +460,7 @@ class CausalObjectAgent(Agent):
             "n_rules": len(self._typed.sources),
             "reward_learned": self._reward_fn is not None,
             "reward_src": self._reward_src,
+            "reward_rejected": self._reward_rejected,
             "iw_goal_calls": self._iw_goal_calls,
             "iw_goal_hits": self._iw_goal_hits,
             "reward_real_true": self._reward_real_true,
