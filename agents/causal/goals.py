@@ -44,3 +44,17 @@ def goal_fn_from_reward(reward_fn):
         except Exception:
             return False
     return goal
+
+
+def value_fn_from_reward(reward_fn):
+    """Adapta reward_function -> value(state)->float p/ o IW best-first. Lê o reward
+    (1º elemento) e é à prova de exceção (falha → -inf, nunca escolhido)."""
+    def value(state):
+        try:
+            r = reward_fn(state)
+            if isinstance(r, (tuple, list)) and len(r) >= 1:
+                return float(r[0])
+            return float(r)
+        except Exception:
+            return float("-inf")
+    return value
