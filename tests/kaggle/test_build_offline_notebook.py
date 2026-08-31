@@ -73,3 +73,10 @@ def test_env_discovery_present():
 def test_get_environments_listing():
     _, run = _run_cell()
     assert "get_environments()" in run
+
+
+def test_patched_mainpy_embedded():
+    # O main.py corrigido (lista jogos offline via Arcade) precisa ser embarcado,
+    # senao o copytree usa o main.py da competicao que so busca jogos via HTTP.
+    _, run = _run_cell()
+    assert '"main.py"' in run
