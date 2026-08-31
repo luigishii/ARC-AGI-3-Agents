@@ -480,6 +480,18 @@ class CausalObjectAgent(Agent):
 
     def _build_reward_prompt(self, scene) -> str:
         ctx = _spatial_context(scene.objects)
+        aid = self._move.avatar_id()
+        avatar_idx = None
+        if aid is not None:
+            for i, o in enumerate(list(scene.objects)[:8]):
+                if o.id == aid:
+                    avatar_idx = i
+                    break
+        ai = avatar_idx if avatar_idx is not None else 0
+        ground = ""
+        if avatar_idx is not None:
+            ground = (f"OBJETO CONTROLAVEL (avatar) = state[{avatar_idx}]; a reward DEVE "
+                      f"medir a distancia DELE (state[{avatar_idx}]) ate o alvo.\n")
         return (
             "Infira reward_function(state) que retorna (reward, goal_flag). REGRAS: "
             "(1) reward é um número GRADUADO — maior = mais perto de resolver, NÃO use só 0/1; "
@@ -489,13 +501,15 @@ class CausalObjectAgent(Agent):
             "arranjo de células — use POSIÇÃO (x,y) e DISTÂNCIAS, não contagem de cor. "
             "O state é lista de (tipo,{x,y,color,shape}); x=col, y=row.\n"
             f"{ctx}\n"
+            f"{ground}"
             "EXEMPLOS (reward espacial, só usam o state, sem import):\n"
-            "  # distancia: objeto[0] se aproxima do alvo mais proximo\n"
+            f"  # distancia: o avatar (state[{ai}]) se aproxima do alvo mais proximo\n"
             "  def reward_function(state):\n"
             "      pts=[b for _,b in state]\n"
             "      if len(pts)<2: return (0.0, False)\n"
-            "      a=pts[0]\n"
-            "      d=min(abs(a['x']-b['x'])+abs(a['y']-b['y']) for b in pts[1:])\n"
+            f"      a=pts[{ai}]\n"
+            f"      others=[c for k,c in enumerate(pts) if k!={ai}]\n"
+            "      d=min(abs(a['x']-c['x'])+abs(a['y']-c['y']) for c in others)\n"
             "      return (-float(d), d==0)\n"
             "  # arranjo: quantos objetos alinhados na mesma linha (y) do alvo\n"
             "  def reward_function(state):\n"
