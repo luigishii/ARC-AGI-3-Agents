@@ -15,9 +15,11 @@ def _load_main():
 def test_offline_uses_arcade_not_http(tmp_path, monkeypatch):
     # Em OFFLINE a lista de jogos vem do Arcade local (get_environments), nunca do
     # HTTP. Diretorio vazio -> 0 jogos, sem crash e sem tocar requests.
+    # _load_main() dispara load_dotenv(override=True); setar o env DEPOIS do import
+    # pra o teste nao depender de um .env de dev no CWD (fetch le o env no call-time).
+    m = _load_main()
     monkeypatch.setenv("OPERATION_MODE", "offline")
     monkeypatch.setenv("ENVIRONMENTS_DIR", str(tmp_path))
-    m = _load_main()
 
     def _boom(*a, **k):
         raise AssertionError("HTTP usado no modo offline")
@@ -29,8 +31,8 @@ def test_offline_uses_arcade_not_http(tmp_path, monkeypatch):
 
 def test_online_still_uses_http(monkeypatch):
     # Em ONLINE o helper usa o HTTP normalmente (aqui simulamos resposta 200).
-    monkeypatch.setenv("OPERATION_MODE", "online")
     m = _load_main()
+    monkeypatch.setenv("OPERATION_MODE", "online")
 
     class _Resp:
         status_code = 200
