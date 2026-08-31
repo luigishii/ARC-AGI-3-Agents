@@ -15,7 +15,8 @@ _INSTRUCTION = (
     '{"type":"reach","avatar":<sel>,"target":<sel>}  '
     '(sel = {"id":I} | {"color":C} | "rarest")\n'
     '{"type":"code","source":"def decide(scene):\\n    return \'ACTION1\'"}\n'
-    'Example valid reply: {"type":"press","action":"ACTION2"}'
+    'Pick the action from the Available list that best fits the scene; do not keep '
+    'repeating an action that produced no visible change.'
 )
 
 
@@ -136,7 +137,7 @@ _FEWSHOT = (
     '  {"type":"code","source":"def decide(scene):\\n    c = rarest_color(scene)\\n'
     '    o = largest(objects_of_color(scene, c))\\n    r, k = ocentroid(o)\\n'
     '    return click(int(k)//11, int(r)//11)"}\n'
-    '  {"type":"code","source":"def decide(scene):\\n    return press(\'ACTION2\')"}'
+    '  {"type":"code","source":"def decide(scene):\\n    return press(MOVES[0])"}'
 )
 
 

@@ -41,8 +41,8 @@ def test_uses_llm_goal(monkeypatch):
     a = _agent(monkeypatch, llm="1")
     a._llm = _CountingFake('{"type":"press","action":"ACTION1"}')
     act = a.choose_action([], _Frame(_grid(3), available=[GameAction.ACTION1]))
-    assert a._goal == {"type": "press", "action": "ACTION1"}
-    assert act.name == "ACTION1"
+    assert act.name == "ACTION1"          # usou a meta press do LLM neste passo
+    assert a._goal is None                # press e single-shot -> limpa apos usar
 
 
 def test_invalid_response_falls_back(monkeypatch):
@@ -73,7 +73,8 @@ def test_sparse_no_requery_with_active_goal(monkeypatch):
 
 def test_levelup_clears_goal(monkeypatch):
     a = _agent(monkeypatch, llm="1")
-    a._llm = _CountingFake('{"type":"press","action":"ACTION1"}')
+    # meta 'code' persiste (nao e single-shot como press) -> testa que o LEVEL-UP a limpa
+    a._llm = _CountingFake('{"type":"code","source":"def decide(scene):\\n    return \'ACTION1\'\\n"}')
     a.choose_action([], _Frame(_grid(3), levels=0, available=[GameAction.ACTION1]))
     assert a._goal is not None
     a.choose_action([], _Frame(_grid(4), levels=1, available=[GameAction.ACTION1]))
