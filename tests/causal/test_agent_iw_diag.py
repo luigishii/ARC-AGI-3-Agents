@@ -83,3 +83,41 @@ def test_phase2_stats_has_diag_keys(monkeypatch):
     assert s["reward_real_evals"] == 9
     # continua serializável em JSON (grava em causal_phase2.json)
     json.dumps(s)
+
+
+# --- _eval_reward_real conta eval+true quando o predicado dá goal_flag=True ---
+def test_eval_reward_real_true(monkeypatch):
+    a = _agent(monkeypatch)
+    a._reward_fn = lambda state: (1.0, True)
+    a._eval_reward_real(_scene())
+    assert a._reward_real_evals == 1
+    assert a._reward_real_true == 1
+
+
+# --- goal_flag=False: conta eval mas não true ---
+def test_eval_reward_real_false(monkeypatch):
+    a = _agent(monkeypatch)
+    a._reward_fn = lambda state: (0.0, False)
+    a._eval_reward_real(_scene())
+    assert a._reward_real_evals == 1
+    assert a._reward_real_true == 0
+
+
+# --- sem reward_fn: não avalia nada ---
+def test_eval_reward_real_none(monkeypatch):
+    a = _agent(monkeypatch)
+    assert a._reward_fn is None
+    a._eval_reward_real(_scene())
+    assert a._reward_real_evals == 0
+    assert a._reward_real_true == 0
+
+
+# --- predicado que quebra não derruba nem conta true (exception-safe) ---
+def test_eval_reward_real_exception_safe(monkeypatch):
+    a = _agent(monkeypatch)
+    def _boom(state):
+        raise ValueError("boom")
+    a._reward_fn = _boom
+    a._eval_reward_real(_scene())        # não levanta
+    assert a._reward_real_evals == 1
+    assert a._reward_real_true == 0

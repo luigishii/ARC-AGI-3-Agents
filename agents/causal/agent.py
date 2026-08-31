@@ -137,6 +137,7 @@ class CausalObjectAgent(Agent):
             self._hud.update(self._prev_grid, grid)
         scene = match_objects(self._prev_scene, parse(latest_frame.frame, hud_mask=self._hud.mask()))
         self._percept.observe(len(scene.objects))   # §2: instabilidade → fallback grid (Tycho)
+        self._eval_reward_real(scene)               # diag: reward_fn na cena real
 
         # fecha o loop causal da ação anterior
         if self._prev_scene is not None and self._last_key is not None:
@@ -317,6 +318,16 @@ class CausalObjectAgent(Agent):
             if r is not None:                    # achou caminho até a meta
                 self._iw_goal_hits += 1
         return r
+
+    def _eval_reward_real(self, scene):
+        """Diag (b)vs(c): avalia a reward_fn aprendida na cena REAL observada.
+        Reusa goal_fn_from_reward (à prova de exceção). Não altera decisão."""
+        if self._reward_fn is None:
+            return
+        state = [(o.shape_hash, _obj_state(o)) for o in scene.objects]
+        self._reward_real_evals += 1
+        if goal_fn_from_reward(self._reward_fn)(state):
+            self._reward_real_true += 1
 
     def _eta_bonus(self, key) -> float:
         # η = ontology_error(0, effect_entropy) = incerteza de efeito da linha (τ,key).
