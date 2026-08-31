@@ -105,3 +105,8 @@ def test_offline_runs_subset_in_one_process():
 def test_offline_env_has_cover():
     import kaggle.build_offline_notebook as b
     assert "CAUSAL_COVER=1" in b.OFFLINE_ENV
+
+
+def test_offline_env_has_fix():
+    import kaggle.build_offline_notebook as b
+    assert "CAUSAL_FIX=1" in b.OFFLINE_ENV

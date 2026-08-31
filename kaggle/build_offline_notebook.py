@@ -27,6 +27,7 @@ OFFLINE_ENV = (
     "CAUSAL_IW=1\n"
     "CAUSAL_RPROG=1\n"       # progresso model-free por reward real (Lever B')
     "CAUSAL_COVER=1\n"       # exploração por cobertura + anti-fixação
+    "CAUSAL_FIX=1\n"        # guarda global anti-fixação
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
