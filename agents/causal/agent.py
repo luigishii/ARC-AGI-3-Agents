@@ -103,6 +103,8 @@ class CausalObjectAgent(Agent):
         self._rprog = {}              # action_key -> [soma_Δ, contagem] (progresso model-free)
         self._rprog_fires = 0         # diag: vezes que a camada rprog escolheu a ação
         self._rprog_on = os.environ.get("CAUSAL_RPROG", "0") != "0"
+        self._cover = {}              # action_key -> nº de vezes tomada (exploração por cobertura)
+        self._cover_on = os.environ.get("CAUSAL_COVER", "0") != "0"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -164,6 +166,7 @@ class CausalObjectAgent(Agent):
                 self._buffer.append((self._prev_scene, self._last_key, actual.kind))
                 self._observe_types(self._prev_scene, scene, self._last_key)
                 self._track_rprog(scene)          # B′: delta de reward real por ação
+                self._track_cover()               # cobertura: conta a ação tomada
                 self._novelty.observe_transition(self._last_key, scene)
                 self._move.observe(self._last_key, self._prev_scene, scene)
                 cur_sig = state_signature(scene)
@@ -256,6 +259,10 @@ class CausalObjectAgent(Agent):
             ek = self._eta_explore(cands)     # sonda a ação de linha mais ambígua (η alto)
             if ek is not None:
                 cand = keymap.get(ek)
+        if cand is None and self._cover_on and cands:
+            ck = self._cover_decide(cands)    # exploração por cobertura (anti-fixação)
+            if ck is not None:
+                cand = keymap.get(ck)
         if cand is None:
             cand = self._policy.decide(
                 scene, self._model, avail,
@@ -369,6 +376,20 @@ class CausalObjectAgent(Agent):
             self._rprog_fires += 1
         return best_key
 
+    def _track_cover(self):
+        """Conta a ação efetivamente tomada (p/ o sweep de cobertura). Só decisão→decisão."""
+        if self._last_key is not None:
+            self._cover[self._last_key] = self._cover.get(self._last_key, 0) + 1
+
+    def _cover_decide(self, cands):
+        """Exploração por cobertura: escolhe a candidata MENOS visitada. Desempate:
+        has_object antes de vazio; evita repetir a última ação; senão ordem de cands."""
+        def rank(c):
+            return (self._cover.get(c.key, 0),
+                    0 if c.has_object else 1,
+                    1 if c.key == self._last_key else 0)
+        return min(cands, key=rank).key
+
     def _eta_bonus(self, key) -> float:
         # η = ontology_error(0, effect_entropy) = incerteza de efeito da linha (τ,key).
         # (type_entropy=0 até existir um classificador de tipos — só then η fica completo.)
@@ -461,6 +482,7 @@ class CausalObjectAgent(Agent):
             "reward_learned": self._reward_fn is not None,
             "reward_src": self._reward_src,
             "reward_rejected": self._reward_rejected,
+            "cover_keys": len(self._cover),
             "iw_goal_calls": self._iw_goal_calls,
             "iw_goal_hits": self._iw_goal_hits,
             "reward_real_true": self._reward_real_true,
