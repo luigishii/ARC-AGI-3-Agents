@@ -60,6 +60,6 @@ def test_single_sample_no_batch(monkeypatch):
     a = _agent(monkeypatch, samples="1")
     fake = _ListFake(['{"type":"press","action":"ACTION1"}'])
     a._llm = fake
-    a.choose_action([], _Frame(_grid(3), available=[GameAction.ACTION1]))
+    act = a.choose_action([], _Frame(_grid(3), available=[GameAction.ACTION1]))
     assert fake.many_calls == 0                      # n=1 → não usa complete_many
-    assert a._goal == {"type": "press", "action": "ACTION1"}
+    assert act.name == "ACTION1"                     # usou a meta press do LLM

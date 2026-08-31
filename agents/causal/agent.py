@@ -211,9 +211,16 @@ class CausalObjectAgent(Agent):
             if gkey is not None and gkey in keymap:
                 cand = keymap[gkey]
                 self._goal_fails = 0
+                # 'press' e tecla unica: executa 1x e limpa -> os proximos passos caem
+                # na pilha de exploracao em vez de repetir a mesma tecla ate GOAL_AGE_MAX
+                # (era a causa da fixacao em ACTION2). Metas 'code'/'reach' persistem.
+                if self._goal.get("type") == "press":
+                    self._goal = None
             else:
                 self._goal_fails += 1
-            if self._goal_fails >= GOAL_FAIL_MAX or self._goal_age >= GOAL_AGE_MAX:
+            if self._goal is not None and (
+                self._goal_fails >= GOAL_FAIL_MAX or self._goal_age >= GOAL_AGE_MAX
+            ):
                 self._goal = None
         # (3) fallback determinístico: navigate → plan → greedy
         if cand is None and self._nav_on:
