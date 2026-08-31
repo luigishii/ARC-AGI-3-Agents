@@ -93,6 +93,10 @@ class CausalObjectAgent(Agent):
         self._since_type = 0
         self._reward_fn = None        # A: reward_function/predicado de meta (goal-directed IW)
         self._reward_src = None
+        self._iw_goal_calls = 0       # diag: IW rodou goal-directed (reward viva)
+        self._iw_goal_hits = 0        # diag: IW achou caminho até a meta
+        self._reward_real_true = 0    # diag: reward_fn deu goal_flag=True em cena real
+        self._reward_real_evals = 0   # diag: cenas reais avaliadas pela reward_fn
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -307,7 +311,12 @@ class CausalObjectAgent(Agent):
             return None
         start = [(o.shape_hash, _obj_state(o)) for o in scene.objects]
         gf = goal_fn_from_reward(self._reward_fn) if self._reward_fn else None
-        return iw_plan(start, [c.key for c in cands], self._typed, goal_fn=gf, max_nodes=300)
+        r = iw_plan(start, [c.key for c in cands], self._typed, goal_fn=gf, max_nodes=300)
+        if gf is not None:                       # diag: IW goal-directed disparou
+            self._iw_goal_calls += 1
+            if r is not None:                    # achou caminho até a meta
+                self._iw_goal_hits += 1
+        return r
 
     def _eta_bonus(self, key) -> float:
         # η = ontology_error(0, effect_entropy) = incerteza de efeito da linha (τ,key).
@@ -379,6 +388,11 @@ class CausalObjectAgent(Agent):
             "n_types": len(self._type_buffer),
             "n_rules": len(self._typed.sources),
             "reward_learned": self._reward_fn is not None,
+            "reward_src": self._reward_src,
+            "iw_goal_calls": self._iw_goal_calls,
+            "iw_goal_hits": self._iw_goal_hits,
+            "reward_real_true": self._reward_real_true,
+            "reward_real_evals": self._reward_real_evals,
             "eta_rows": len(self._etable.rows),
         }
 
