@@ -58,3 +58,29 @@ def value_fn_from_reward(reward_fn):
         except Exception:
             return float("-inf")
     return value
+
+
+def accept_reward(source, sample_states, min_states=3):
+    """Aceitação COMPORTAMENTAL da reward: avalia em estados reais e rejeita patológicas.
+    Retorna (aceito, motivo). Cold-start: < min_states estados -> aceita (bootstrap)."""
+    fn = compile_reward(source)
+    if fn is None:
+        return (False, "não compila")
+    if len(sample_states) < min_states:
+        return (True, "poucos estados p/ julgar (cold-start)")
+    vals, flags = [], []
+    for st in sample_states:
+        try:
+            r = fn(st)
+        except Exception:
+            return (False, "levanta exceção em estado real")
+        if isinstance(r, (tuple, list)) and len(r) >= 2:
+            vals.append(float(r[0])); flags.append(bool(r[1]))
+        else:
+            vals.append(float(r)); flags.append(bool(r))
+    if all(flags):
+        return (False, "goal_flag=True em TODO estado (falso-positivo)")
+    distinct_states = len({repr(st) for st in sample_states}) > 1
+    if distinct_states and len({round(v, 6) for v in vals}) <= 1:
+        return (False, "reward escalar CONSTANTE entre estados distintos (sem gradiente)")
+    return (True, "ok")
