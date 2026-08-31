@@ -80,3 +80,8 @@ def test_patched_mainpy_embedded():
     # senao o copytree usa o main.py da competicao que so busca jogos via HTTP.
     _, run = _run_cell()
     assert '"main.py"' in run
+
+
+def test_offline_env_has_rprog():
+    import kaggle.build_offline_notebook as b
+    assert "CAUSAL_RPROG=1" in b.OFFLINE_ENV

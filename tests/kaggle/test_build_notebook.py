@@ -81,3 +81,8 @@ def test_main_writes_valid_ipynb(tmp_path, monkeypatch):
     bn.main()
     with open(tmp_path / "submission.ipynb") as f:
         json.load(f)
+
+
+def test_env_has_rprog():
+    import kaggle.build_notebook as b
+    assert "CAUSAL_RPROG=1" in b.ENV

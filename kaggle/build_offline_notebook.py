@@ -25,6 +25,7 @@ OFFLINE_ENV = (
     "CAUSAL_TYPED=1\n"
     "CAUSAL_ETA=1\n"
     "CAUSAL_IW=1\n"
+    "CAUSAL_RPROG=1\n"       # progresso model-free por reward real (Lever B')
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 

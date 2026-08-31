@@ -43,6 +43,7 @@ ENV = (
     "CAUSAL_TYPED=1\n"       # síntese fatorada f_τ (Qwen valida por-tipo via accept_rule)
     "CAUSAL_ETA=1\n"         # exploração por erro de ontologia (η)
     "CAUSAL_IW=1\n"          # planner Iterated Width sobre o TypedWorldModel
+    "CAUSAL_RPROG=1\n"       # progresso model-free por reward real (Lever B')
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
