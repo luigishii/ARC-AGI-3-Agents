@@ -44,20 +44,27 @@ def _new_count(state, seen, width) -> int:
     return sum(1 for t in _tuples(state, width) if t not in seen)
 
 
-def iw_search(start, actions, model, goal_fn=None, width=1, max_nodes=1000):
-    """BFS com poda por novidade de largura `width`. Com goal_fn → devolve a 1ª ação
-    do caminho que atinge o goal (senão None). Sem goal_fn (exploração) → a ação-raiz
-    cujo próximo estado revela mais átomos inéditos (None se nenhuma muda nada)."""
+def iw_search(start, actions, model, goal_fn=None, value_fn=None, width=1, max_nodes=1000):
+    """BFS com poda por novidade de largura `width`.
+    - goal_fn → 1ª ação do caminho que atinge o goal (senão None).
+    - senão value_fn → 1ª ação rumo ao estado de MAIOR valor alcançado, se estritamente
+      maior que value_fn(start) (senão None). Best-first mantendo a poda por novidade.
+    - senão (exploração) → ação-raiz cujo próximo estado revela mais átomos inéditos
+      (None se nenhuma muda nada)."""
     if goal_fn is not None and goal_fn(start):
         return None
     seen = set()
     _register(start, seen, width)
 
+    val_mode = goal_fn is None and value_fn is not None
+    best_val = value_fn(start) if val_mode else None
+    best_val_action = None
+
     q = deque()
     best_action, best_new = None, 0
     for a in actions:
         nxt = model.predict(start, a)
-        if goal_fn is None:
+        if goal_fn is None and value_fn is None:
             n = _new_count(nxt, seen, width)
             if n > best_new:
                 best_new, best_action = n, a
@@ -67,20 +74,29 @@ def iw_search(start, actions, model, goal_fn=None, width=1, max_nodes=1000):
     while q and nodes < max_nodes:
         state, first = q.popleft()
         nodes += 1
-        if goal_fn is not None and goal_fn(state):
-            return first
+        if goal_fn is not None:
+            if goal_fn(state):
+                return first
+        elif val_mode:
+            v = value_fn(state)
+            if v > best_val:                # estritamente melhor que o start/melhor atual
+                best_val, best_val_action = v, first
         if not _register(state, seen, width):
-            continue                       # não-novo → poda (coração do IW)
+            continue                        # não-novo → poda (coração do IW)
         for a in actions:
-            q.append((model.predict(state, a), a))
+            q.append((model.predict(state, a), first))   # propaga a AÇÃO-RAIZ
 
-    return None if goal_fn is not None else best_action
+    if goal_fn is not None:
+        return None
+    if val_mode:
+        return best_val_action              # None se nada superou value_fn(start)
+    return best_action
 
 
-def iw_plan(start, actions, model, goal_fn=None, max_width=2, max_nodes=1000):
+def iw_plan(start, actions, model, goal_fn=None, value_fn=None, max_width=2, max_nodes=1000):
     """IW iterado: tenta largura 1, depois 2, ... até max_width. 1ª que resolve vence."""
     for w in range(1, max_width + 1):
-        r = iw_search(start, actions, model, goal_fn, w, max_nodes)
+        r = iw_search(start, actions, model, goal_fn, value_fn, w, max_nodes)
         if r is not None:
             return r
     return None
