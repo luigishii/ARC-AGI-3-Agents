@@ -37,6 +37,24 @@ def action_key(action, cell=None) -> str:
     return f"{action.name}@cell={gx},{gy}"
 
 
+def _size_bucket(n: int) -> int:
+    for i, b in enumerate((4, 16, 64, 256, 1024)):
+        if n < b:
+            return i
+    return 5
+
+
+def click_key(scene, x: int, y: int) -> str:
+    """Chave de clique do clickmap (Tufa): keyeia pelo (cor, tamanho-do-bloco) do objeto
+    sob o cursor, NAO pela posicao. Cliques na MESMA classe visual compartilham chave ->
+    o modelo aprende produtividade P(efeito!=none) por classe e para de clicar o inerte
+    (barra HUD/fundo = bloco enorme, cor fixa -> nunca muda). Fundo/vazio -> ACTION6@bg."""
+    for o in scene.objects:
+        if (y, x) in o.cells:
+            return f"ACTION6@c{o.color}s{_size_bucket(o.size)}"
+    return "ACTION6@bg"
+
+
 def _object_cells(scene) -> set:
     occ = set()
     for o in scene.objects:
@@ -45,7 +63,7 @@ def _object_cells(scene) -> set:
     return occ
 
 
-def candidates(scene, available_actions) -> list:
+def candidates(scene, available_actions, clickmap: bool = False) -> list:
     out = []
     occ = _object_cells(scene)
     for a in available_actions:
@@ -56,10 +74,10 @@ def candidates(scene, available_actions) -> list:
             for gy in range(GRID_N):
                 for gx in range(GRID_N):
                     x, y = cell_center(gx, gy)
-                    out.append(
-                        Candidate(action, x, y, action_key(action, (gx, gy)),
-                                  (gx, gy) in occ)
-                    )
+                    # clickmap: chave por (cor,tamanho) do objeto sob o cursor
+                    # (produtividade por classe visual); senao chave por celula 6x6.
+                    key = click_key(scene, x, y) if clickmap else action_key(action, (gx, gy))
+                    out.append(Candidate(action, x, y, key, (gx, gy) in occ))
     return out
 
 

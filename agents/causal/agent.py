@@ -174,6 +174,7 @@ class CausalObjectAgent(Agent):
         self._rprog_on = os.environ.get("CAUSAL_RPROG", "0") != "0"
         self._cover = {}              # action_key -> nº de vezes tomada (exploração por cobertura)
         self._cover_on = os.environ.get("CAUSAL_COVER", "0") != "0"
+        self._clickmap = os.environ.get("CAUSAL_CLICKMAP", "0") != "0"
         self._fix_run = 0             # repetições consecutivas da MESMA key escolhida
         self._fix_breaks = 0          # diag: vezes que o guarda quebrou uma fixação
         self._fix_on = os.environ.get("CAUSAL_FIX", "0") != "0"
@@ -263,7 +264,7 @@ class CausalObjectAgent(Agent):
         if self.MAX_ACTIONS not in (0, float("inf")):
             budget_frac = max(0.0, 1 - self.action_counter / self.MAX_ACTIONS)
         avail = latest_frame.available_actions or [GameAction.ACTION1]
-        cands = candidates(scene, avail)
+        cands = candidates(scene, avail, clickmap=self._clickmap)
         keymap = {c.key: c for c in cands}
         moves = self._move.moves()
         # (1) consulta esparsa ao LLM: só se ligado, sem meta ativa e passado o cooldown
