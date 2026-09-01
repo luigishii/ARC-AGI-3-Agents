@@ -44,6 +44,35 @@ def _strip_harmony_markers(s: str) -> str:
     return _HARMONY_TOKEN.sub("", s)
 
 
+def _install_gpt_oss_kernel(kernel_dir) -> bool:
+    """gpt-oss MXFP4 offline: entrega o pacote `triton_kernels` LOCAL direto ao
+    transformers, monkeypatchando get_kernel. Contorna get_local_kernel, que exige
+    um metadata.json que o repo nao publica (e list_repo_tree, que a rede bloqueia).
+    kernel_dir = pasta que contem o pacote `triton_kernels/` (build/torch-universal).
+    Devolve o MESMO objeto que get_local_kernel devolveria, sem tocar em rede/arquivo."""
+    if not kernel_dir or not os.path.isdir(os.path.join(kernel_dir, "triton_kernels")):
+        return False
+    import importlib
+    import sys
+    if kernel_dir not in sys.path:
+        sys.path.insert(0, kernel_dir)
+    tk = importlib.import_module("triton_kernels")
+
+    def _local_get_kernel(repo_id, *a, **k):
+        if "triton_kernels" in str(repo_id):
+            return tk
+        raise RuntimeError("kernel nao-local pedido offline: " + str(repo_id))
+
+    import transformers.integrations.hub_kernels as _hk
+    _hk.get_kernel = _local_get_kernel
+    try:  # mxfp4.py chama o nome get_kernel importado no seu proprio namespace
+        import transformers.integrations.mxfp4 as _mx
+        _mx.get_kernel = _local_get_kernel
+    except Exception:
+        pass
+    return True
+
+
 def extract_final_channel(text: str) -> str:
     """Isola o conteudo do canal `final` do Harmony (a resposta), descartando o
     canal `analysis` (a cadeia de raciocinio). Sem marcadores (modelo nao-harmony)
@@ -105,8 +134,10 @@ class HFClient(LLMClient):
         self._tok = AutoTokenizer.from_pretrained(model_path)
         if self._harmony:
             # gpt-oss ja vem em MXFP4 (~63GB, cabe). dtype="auto" preserva a quantizacao
-            # (float16 forcaria dequant p/ bf16 ~234GB -> OOM); os kernels MXFP4 vem da
-            # lib HF `kernels` (repo kernels-community/triton_kernels, cacheado offline).
+            # (float16 forcaria dequant p/ bf16 ~234GB -> OOM). Entrega o pacote
+            # triton_kernels LOCAL ao transformers (contorna get_kernel/rede/metadata.json).
+            _ok = _install_gpt_oss_kernel(os.environ.get("GPT_OSS_KERNEL_DIR"))
+            print("[causal] gpt-oss kernel local:", "OK" if _ok else "NAO INSTALADO")
             self._model = AutoModelForCausalLM.from_pretrained(
                 model_path, dtype="auto", device_map="cuda")
         else:

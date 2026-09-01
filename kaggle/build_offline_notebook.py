@@ -82,20 +82,20 @@ def build_offline_notebook(sources):
         "                       '-> os .py dos jogos nao vem no container offline')\n"
         "env_dir = os.path.dirname(os.path.commonprefix(metas))\n"
         "print('ENVIRONMENTS_DIR =', env_dir, '(%d metadata.json)' % len(metas))\n"
-        "_tk = glob.glob('/kaggle/input/**/triton_kernels_repo/build/*/metadata.json', "
+        "_tk = glob.glob('/kaggle/input/**/build/torch-universal/triton_kernels/__init__.py', "
         "recursive=True)\n"
         "if _tk:\n"
-        "    _root = os.path.dirname(os.path.dirname(os.path.dirname(_tk[0])))\n"
-        "    shutil.copytree(_root, '/kaggle/working/tkrepo', dirs_exist_ok=True)\n"
-        "    _lk = '/kaggle/working/tkrepo'\n"
+        "    _tu = os.path.dirname(os.path.dirname(_tk[0]))\n"          # .../build/torch-universal
+        "    _reporoot = os.path.dirname(os.path.dirname(_tu))\n"       # dir que contem build/
+        "    shutil.copytree(_reporoot, '/kaggle/working/tkrepo', dirs_exist_ok=True)\n"
+        "    _lk = '/kaggle/working/tkrepo/build/torch-universal'\n"
         "else:\n"
         "    _lk = ''\n"
-        "print('LOCAL_KERNELS ->', _lk or 'NAO ACHOU triton_kernels_repo/build (gpt-oss falha)')\n"
+        "print('GPT_OSS_KERNEL_DIR ->', _lk or 'NAO ACHOU triton_kernels/ (gpt-oss falha)')\n"
         f"with open({REPO!r} + '/.env', 'w') as f:\n"
         f"    f.write({OFFLINE_ENV!r} + 'ENVIRONMENTS_DIR=' + env_dir + '\\n'\n"
         "            + 'HF_HOME=/kaggle/working/hfcache\\n'\n"
-        "            + ('LOCAL_KERNELS=kernels-community/triton_kernels=' + _lk + '\\n'"
-        " if _lk else ''))\n"   # override: cache gravavel
+        "            + ('GPT_OSS_KERNEL_DIR=' + _lk + '\\n' if _lk else ''))\n"   # override: cache gravavel
         "os.environ['OPERATION_MODE'] = 'offline'\n"
         "os.environ['ENVIRONMENTS_DIR'] = env_dir\n"
         "from arc_agi import Arcade, OperationMode\n"

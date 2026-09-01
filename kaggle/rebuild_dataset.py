@@ -12,14 +12,15 @@ assert wheels, "FALHOU: nenhum wheel baixado -- NAO suba"
 print("OK wheel:", [os.path.basename(x) for x in wheels],
       "| total wheels:", len(os.listdir(STAGE + "/offline_wheels")))
 
-# 2) repo de kernels como ARQUIVOS REAIS (local_dir, sem symlinks -> sobrevive ao zip).
-#    O LOCAL_KERNELS aponta pra ca; get_local_kernel le build/<variante>/metadata.json.
+# 2) pacote triton_kernels como ARQUIVOS REAIS (local_dir, sem symlinks -> sobrevive
+#    ao zip). O agente importa esse pacote direto (GPT_OSS_KERNEL_DIR), sem metadata.json.
 from huggingface_hub import snapshot_download
 snapshot_download("kernels-community/triton_kernels",
                   local_dir=STAGE + "/triton_kernels_repo")
-assert glob.glob(STAGE + "/triton_kernels_repo/build/*/metadata.json"), \
-    "FALHOU: build/<variante>/metadata.json ausente no repo de kernels"
-print("OK kernel repo:", glob.glob(STAGE + "/triton_kernels_repo/build/*"))
+assert os.path.isfile(STAGE + "/triton_kernels_repo/build/torch-universal/"
+                      "triton_kernels/__init__.py"), \
+    "FALHOU: pacote triton_kernels/ ausente em build/torch-universal"
+print("OK kernel pkg:", STAGE + "/triton_kernels_repo/build/torch-universal/triton_kernels")
 
 # 3) metadata (mesmo id -> nova versao do MESMO dataset)
 user = os.environ.get("KAGGLE_USERNAME") or "luigiishii"
