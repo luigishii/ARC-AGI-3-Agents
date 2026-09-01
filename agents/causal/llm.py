@@ -19,6 +19,13 @@ _INSTRUCTION = (
     'repeating an action that produced no visible change.'
 )
 
+_DIRECT_INSTRUCTION = (
+    "Escolha a PROXIMA acao imediata (uma so) para fazer progresso. Responda "
+    "APENAS um JSON, sem markdown, sem prosa:\n"
+    '{"type":"press","action":"ACTIONk"}   (k da lista disponivel)\n'
+    '{"type":"click_cell","gx":0,"gy":0}   (gx,gy em 0..5 = celula do grid 6x6)'
+)
+
 
 class LLMClient:
     def complete(self, prompt: str) -> str:
@@ -153,6 +160,29 @@ def build_prompt(scene, dynamics) -> str:
     lines.append(f"DYNAMICS: moves={dyn.get('moves', {})} notes={dyn.get('notes', '')}")
     lines.append(_FEWSHOT)
     lines.append(_INSTRUCTION)
+    return "\n".join(lines)
+
+
+def build_direct_prompt(scene, dyn, last=None) -> str:
+    """Prompt orientado a ACAO (distinto de build_prompt, orientado a META): serializa
+    a cena objeto-centrica + AVAILABLE_ACTIONS + feedback da ultima acao, e pede UMA
+    proxima acao. O parsing reusa parse_goal; a execucao reusa execute_goal."""
+    dyn = dyn or {}
+    lines = [f"OBJETOS ({len(scene.objects)}):"]
+    for o in scene.objects:
+        lines.append(
+            f"  id={o.id} color={o.color} centroid={o.centroid} "
+            f"size={o.size} bbox={o.bbox}"
+        )
+    lines.append(f"AVAILABLE_ACTIONS: {dyn.get('available', [])}   (use SO essas)")
+    if last and last.get("key"):
+        eff = last.get("effect") or "nenhuma mudanca"
+        lines.append(
+            f"Sua ultima acao {last['key']} produziu: {eff}. Escolha a PROXIMA "
+            "acao que faz PROGRESSO; NAO repita uma acao que nao mudou nada."
+        )
+        lines.append("PROGRESSO OBSERVADO:")
+    lines.append(_DIRECT_INSTRUCTION)
     return "\n".join(lines)
 
 
