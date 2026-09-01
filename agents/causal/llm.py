@@ -258,12 +258,33 @@ def build_prompt(scene, dynamics) -> str:
     return "\n".join(lines)
 
 
+_HEX = "0123456789abcdef"
+
+
+def grid_to_ascii(grid) -> str:
+    """Desenha o grid como ASCII: 1 char hex por celula (cor 0-15 -> 0-f), linhas
+    separadas por \\n. E a representacao ESPACIAL que a lista de objetos nao da -
+    o modelo ve a posicao exata de cada celula (approach do duck-v26/Tufa que pontuou).
+    None/formato invalido -> string vazia."""
+    if grid is None:
+        return ""
+    try:
+        out = []
+        for row in grid:
+            out.append("".join(_HEX[int(v) & 15] for v in row))
+        return "\n".join(out)
+    except TypeError:
+        return ""
+
+
 def build_direct_prompt(scene, dyn, last=None) -> str:
     """Prompt orientado a ACAO (distinto de build_prompt, orientado a META): serializa
-    a cena objeto-centrica + AVAILABLE_ACTIONS + feedback da ultima acao, e pede UMA
-    proxima acao. O parsing reusa parse_goal; a execucao reusa execute_goal."""
+    o GRID ASCII (espacial) + a cena objeto-centrica + AVAILABLE_ACTIONS + feedback da
+    ultima acao, e pede UMA proxima acao. O parsing reusa parse_goal; exec reusa execute_goal."""
     dyn = dyn or {}
-    lines = [f"OBJETOS ({len(scene.objects)}):"]
+    lines = ["GRID (1 char = cor 0-f; linha = y de cima->baixo, coluna = x):",
+             grid_to_ascii(scene.grid),
+             f"OBJETOS ({len(scene.objects)}):"]
     for o in scene.objects:
         lines.append(
             f"  id={o.id} color={o.color} centroid={o.centroid} "
