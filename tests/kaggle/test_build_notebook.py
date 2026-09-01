@@ -96,3 +96,8 @@ def test_env_has_cover():
 def test_env_has_fix():
     import kaggle.build_notebook as b
     assert "CAUSAL_FIX=1" in b.ENV
+
+
+def test_env_has_direct():
+    import kaggle.build_notebook as b
+    assert "CAUSAL_DIRECT=1" in b.ENV

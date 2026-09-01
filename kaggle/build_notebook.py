@@ -46,6 +46,7 @@ ENV = (
     "CAUSAL_RPROG=1\n"       # progresso model-free por reward real (Lever B')
     "CAUSAL_COVER=1\n"       # exploração por cobertura + anti-fixação
     "CAUSAL_FIX=1\n"        # guarda global anti-fixação
+    "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
