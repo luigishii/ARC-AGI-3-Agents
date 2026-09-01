@@ -102,6 +102,29 @@ def grounded_multi_reward_fn(max_size=64):
     return reward_function
 
 
+def grounded_pattern_reward_fn(split=32, max_size=64):
+    """Reward por-classe p/ PINTURA/SEQUENCIA/FLUXO (docs/GAMES.md): esses jogos tem uma
+    REFERENCIA (tipicamente no topo) e uma area EDITAVEL (embaixo); vence quando casam.
+    Proxy grounded: compara a composicao de cor da metade de cima vs baixo (objetos
+    pequenos) -> diferenca simetrica dos multiconjuntos; 0 = casam. goal_flag em 0.
+    Proxy (nao deteccao exata da referencia), exception-safe."""
+    from collections import Counter
+
+    def reward_function(state):
+        try:
+            top, bot = Counter(), Counter()
+            for _, o in state:
+                if o.get("size", 10 ** 9) <= max_size:
+                    (top if o["y"] < split else bot)[o["color"]] += 1
+            if not top or not bot:
+                return (0.0, False)
+            diff = sum((top - bot).values()) + sum((bot - top).values())
+            return (-float(diff), diff == 0)
+        except Exception:
+            return (0.0, False)
+    return reward_function
+
+
 def accept_reward(source, sample_states, min_states=3):
     """Aceitação COMPORTAMENTAL da reward: avalia em estados reais e rejeita patológicas.
     Retorna (aceito, motivo). Cold-start: < min_states estados -> aceita (bootstrap)."""

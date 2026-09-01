@@ -25,7 +25,7 @@ from .typed_model import TypedWorldModel, accept_rule
 from .iw import iw_plan
 from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
                     value_fn_from_reward, accept_reward, grounded_reward_fn,
-                    grounded_multi_reward_fn)
+                    grounded_multi_reward_fn, grounded_pattern_reward_fn)
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
@@ -663,6 +663,13 @@ class CausalObjectAgent(Agent):
             if same:
                 self._reward_fn = grounded_multi_reward_fn()
                 self._reward_src = "grounded:multi-align(same-color,small)"
+                return True
+            # classe PINTURA/SEQUENCIA/FLUXO: referencia (topo) vs editavel (baixo).
+            tops = sum(1 for o in objs if o.size <= 64 and o.centroid[0] < 32)
+            bots = sum(1 for o in objs if o.size <= 64 and o.centroid[0] >= 32)
+            if tops and bots:
+                self._reward_fn = grounded_pattern_reward_fn()
+                self._reward_src = "grounded:pattern(topo-vs-baixo)"
                 return True
             # grounded on mas sem estrutura util -> cai no LLM (fallback)
         states = [[(o.shape_hash, _obj_state(o)) for o in sc.objects]
