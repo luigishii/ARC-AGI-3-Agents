@@ -31,6 +31,7 @@ GOAL_AGE_MAX = 20
 TYPE_MIN_OBS = 3          # transições mínimas p/ tentar sintetizar f_τ
 TYPE_BUF_MAX = 64         # transições guardadas por tipo
 TYPE_COOLDOWN = 8         # cadência esparsa da síntese de regra de tipo
+REWARD_DEFER_MAX = 4      # ticks elegíveis a esperar o avatar antes de sintetizar a reward
 
 
 def _obj_state(o) -> dict:
@@ -155,6 +156,7 @@ class CausalObjectAgent(Agent):
         self._reward_fn = None        # A: reward_function/predicado de meta (goal-directed IW)
         self._reward_src = None
         self._reward_rejected = 0     # diag: rewards barradas pelo check comportamental
+        self._reward_defer = 0        # ticks já esperados pelo avatar (gate de síntese)
         self._iw_goal_calls = 0       # diag: IW rodou goal-directed (reward viva)
         self._iw_goal_hits = 0        # diag: IW achou caminho até a meta
         self._reward_real_true = 0    # diag: reward_fn deu goal_flag=True em cena real
@@ -278,7 +280,7 @@ class CausalObjectAgent(Agent):
             tau = self._pick_type_to_learn()
             if tau is not None:
                 self._try_learn_type_rule(tau)
-            if self._reward_fn is None:
+            if self._should_learn_reward():
                 self._try_learn_reward(scene)      # A: sintetiza predicado de meta
             self._since_type = 0
         cand = None
@@ -576,6 +578,16 @@ class CausalObjectAgent(Agent):
             "      return (float(sum(1 for y in ys if y==ys[0])), False)\n"
             'Responda SÓ JSON {"type":"code","source":"def reward_function(state): ..."}'
         )
+
+    def _should_learn_reward(self) -> bool:
+        """Gate: só sintetiza a reward quando o avatar já foi aprendido (grounding entra no
+        prompt) OU após REWARD_DEFER_MAX ticks (deadline p/ jogos sem avatar/clique)."""
+        if self._reward_fn is not None:
+            return False
+        if self._move.avatar_id() is not None or self._reward_defer >= REWARD_DEFER_MAX:
+            return True
+        self._reward_defer += 1
+        return False
 
     def _try_learn_reward(self, scene) -> bool:
         """A: sintetiza a reward via LLM e ACEITA a 1ª que passa o check estático
