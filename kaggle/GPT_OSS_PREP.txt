@@ -1,0 +1,72 @@
+================================================================================
+ PREP DO gpt-oss-120b (MXFP4) PARA RODAR OFFLINE NO KAGGLE
+================================================================================
+Objetivo: dar ao container offline (transformers 5.0 / triton 3.6, SEM internet)
+os kernels MXFP4 que faltam, para o gpt-oss-120b carregar em ~63GB (nao dequantizar
+para bf16 ~234GB, que estoura). Faz-se 1x com internet ON; depois roda air-gapped.
+
+--------------------------------------------------------------------------------
+ PASSO 1 - COM INTERNET ON (sessao Kaggle T4/CPU, ou local). Cola numa celula:
+--------------------------------------------------------------------------------
+
+# (informativo) confirma versoes deste container
+import transformers, transformers.utils.import_utils as iu
+print("transformers", transformers.__version__)
+print("consts KERNEL:", [x for x in dir(iu) if "KERNEL" in x.upper()])
+from transformers.utils.import_utils import KERNELS_MIN_VERSION
+print("KERNELS_MIN_VERSION =", KERNELS_MIN_VERSION)   # 0.16.1 precisa ser >= isso
+
+# 1a) baixa os wheels (py3-none-any -> servem no container offline)
+!pip download kernels huggingface_hub -d ./offline_wheels
+
+# 1b) cacheia o repo de kernels num HF_HOME portatil
+import os; os.environ["HF_HOME"] = "./hf_cache"
+from huggingface_hub import snapshot_download
+snapshot_download("kernels-community/triton_kernels")   # ~536KB, torch-universal
+
+# 1c) confere o que baixou
+print("WHEELS:", len(os.listdir("./offline_wheels")), "arquivos")
+import glob
+print("CACHE :", glob.glob("./hf_cache/hub/models--*"))
+
+--------------------------------------------------------------------------------
+ PASSO 2 - SUBIR 2 DATASETS e anexar ao notebook offline
+--------------------------------------------------------------------------------
+  A) ./offline_wheels  -> 1 dataset (os ~46 wheels)
+  B) ./hf_cache        -> 1 dataset. IMPORTANTE: preserva a estrutura interna
+     ./hf_cache/hub/models--kernels-community--triton_kernels/...
+     (o dataset precisa manter esse 'hub/' dentro)
+
+--------------------------------------------------------------------------------
+ PASSO 3 - DESCOBRIR OS PATHS MONTADOS. Cola numa celula (com os datasets anexados):
+--------------------------------------------------------------------------------
+
+import glob, os
+# path do dataset de wheels (a pasta que contem os .whl)
+whl = glob.glob("/kaggle/input/**/kernels-*.whl", recursive=True)
+print("KERNELS_WHEELS =", os.path.dirname(whl[0]) if whl else "NAO ACHOU")
+# path do HF_HOME = a pasta que CONTEM 'hub/' (nao o 'hub/' em si)
+hubs = glob.glob("/kaggle/input/**/hub/models--kernels-community--triton_kernels", recursive=True)
+print("HF_CACHE_HOME =", os.path.dirname(os.path.dirname(hubs[0])) if hubs else "NAO ACHOU")
+
+--------------------------------------------------------------------------------
+ PASSO 4 - ME MANDAR (cola aqui no chat):
+--------------------------------------------------------------------------------
+  - KERNELS_MIN_VERSION  (do passo 1)
+  - KERNELS_WHEELS       (do passo 3)
+  - HF_CACHE_HOME        (do passo 3)
+
+  Eu edito KERNELS_WHEELS e HF_CACHE_HOME no kaggle/build_notebook.py, regenero e
+  te devolvo o offline.ipynb final.
+
+--------------------------------------------------------------------------------
+ COMO SABER QUE FUNCIONOU (no run offline com o notebook final):
+--------------------------------------------------------------------------------
+  - boot log NAO diz "defaulting to dequantizing"
+  - [causal] LLM ativo: hf        (nao 'null')
+  - nvidia-smi mostra ~63GB       (nao 234)
+  - phase2 stats: direct_hits > 0 e (o teste decisivo) levels_completed
+
+  SE der erro de escrita/lock no HF_HOME (e /kaggle/input read-only): me avisa,
+  a gente copia o cache pra /kaggle/working na celula 0 e aponta HF_HOME la.
+================================================================================
