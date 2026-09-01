@@ -53,6 +53,24 @@ def to_grid(frame) -> np.ndarray:
     return _to_grid(frame)
 
 
+def win_grid(frame) -> np.ndarray:
+    """Camada de VITORIA de um frame que completou nivel.
+
+    No passo que sobe de nivel a API empilha DUAS camadas: a de baixo e o
+    tabuleiro terminal do nivel vencido (o estado de vitoria real) e a de cima
+    e o init do proximo nivel. `to_grid`/`parse` leem a ULTIMA camada -> no
+    instante da vitoria enxergam o proximo nivel, nao o resolvido. `win_grid`
+    recupera a camada de vitoria (a imediatamente anterior a abertura do
+    proximo nivel). Frame de 1 camada -> nao ha vitoria distinta, cai no board.
+    """
+    arr = np.array(frame)
+    while arr.ndim > 3:        # colapsa dims acima de uma pilha de grids
+        arr = arr[-1]
+    if arr.ndim == 3 and arr.shape[0] >= 2:
+        return arr[-2].astype(int)
+    return _to_grid(frame)
+
+
 def canonical_color_map(grid: np.ndarray) -> dict:
     """Mapa cor→rank por frequência decrescente (mais comum=0). Torna a física
     aprendida abstrata: gravidade é a mesma pro bloco azul ou amarelo."""

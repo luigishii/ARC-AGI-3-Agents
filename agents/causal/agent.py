@@ -9,7 +9,7 @@ from agents.agent import Agent
 
 from .causal_model import CausalModel
 from .instrumentation import Instrumentation
-from .perception import match_objects, parse, to_grid
+from .perception import match_objects, parse, to_grid, win_grid
 from .policy import Policy, candidates
 from .hud import HudMask
 from .novelty import NoveltyModel, state_signature
@@ -233,7 +233,12 @@ class CausalObjectAgent(Agent):
                 # frame-role (Tycho Gap 2): o sucessor é init-de-próximo-nível, NÃO um
                 # sucessor mecânico → registra só o desfecho (âncora de meta) e não polui
                 # os aprendizes de dinâmica com uma transição decisão→init fabricada.
-                self._novelty.record_goal_anchor(state_signature(self._prev_scene))
+                # winframe (Tufa/duck-v26): no passo de vitoria a API empilha
+                # [tabuleiro RESOLVIDO, init do proximo nivel]; `scene` (=to_grid) ja
+                # e o proximo nivel. Ancora a meta no tabuleiro RESOLVIDO real (camada
+                # de vitoria) — a unica vez que enxergamos "como e um nivel vencido".
+                win_scene = parse(win_grid(latest_frame.frame), hud_mask=self._hud.mask())
+                self._novelty.record_goal_anchor(state_signature(win_scene))
                 self._goal = None                     # nível cumprido → re-planejar
                 self._last_effect_kind = None
             else:
