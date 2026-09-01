@@ -50,8 +50,21 @@ def build_offline_notebook(sources):
         sources = {**sources, "main.py": base64.b64encode(f.read()).decode()}
     cell0 = (
         "!pip install --no-index --find-links %s arc-agi python-dotenv\n" % WHEELS
-        + "!pip install --no-index --find-links %s kernels huggingface_hub || "
-        "echo 'kernels wheels ausentes -> gpt-oss cairia em bf16'\n" % KERNELS_WHEELS)
+        + "import glob as _g, os as _o, shutil as _sh, subprocess as _sp\n"
+        "_wh = _g.glob('/kaggle/input/**/kernels-*.whl', recursive=True)\n"
+        "_wd = _o.path.dirname(_wh[0]) if _wh else ''\n"
+        "print('KERNELS_WHEELS =', _wd or 'NAO ACHOU')\n"
+        "if _wd:\n"
+        "    print(_sp.run(['pip','install','--no-index','--find-links',_wd,'kernels',"
+        "'huggingface_hub'], capture_output=True, text=True).stderr[-400:] or 'kernels OK')\n"
+        "_hc = _g.glob('/kaggle/input/**/hub/models--kernels-community--triton_kernels', "
+        "recursive=True)\n"
+        "if _hc:\n"
+        "    _src = _o.path.dirname(_o.path.dirname(_hc[0]))\n"   # dir que contem hub/
+        "    _sh.copytree(_src, '/kaggle/working/hfcache', dirs_exist_ok=True)\n"
+        "    print('HF_HOME writable -> /kaggle/working/hfcache')\n"
+        "else:\n"
+        "    print('AVISO: hub cache de kernels nao encontrado')\n")
     cell1 = (
         "import os, shutil, base64, glob\n"
         f"shutil.copytree({COMP_REPO!r}, {REPO!r}, dirs_exist_ok=True)\n"
@@ -70,7 +83,8 @@ def build_offline_notebook(sources):
         "env_dir = os.path.dirname(os.path.commonprefix(metas))\n"
         "print('ENVIRONMENTS_DIR =', env_dir, '(%d metadata.json)' % len(metas))\n"
         f"with open({REPO!r} + '/.env', 'w') as f:\n"
-        f"    f.write({OFFLINE_ENV!r} + 'ENVIRONMENTS_DIR=' + env_dir + '\\n')\n"
+        f"    f.write({OFFLINE_ENV!r} + 'ENVIRONMENTS_DIR=' + env_dir + '\\n'\n"
+        "            + 'HF_HOME=/kaggle/working/hfcache\\n')\n"   # override: cache gravavel
         "os.environ['OPERATION_MODE'] = 'offline'\n"
         "os.environ['ENVIRONMENTS_DIR'] = env_dir\n"
         "from arc_agi import Arcade, OperationMode\n"
