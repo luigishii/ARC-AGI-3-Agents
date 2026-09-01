@@ -17,7 +17,8 @@ from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_
 from .planning import TransitionModel, plan
 from .navigate import MovementModel, navigate
 from .perception_strategy import PerceptionStrategy
-from .llm import shared_llm_client, build_prompt, parse_goal, execute_goal, client_kind
+from .llm import (shared_llm_client, build_prompt, build_direct_prompt,
+                  parse_goal, execute_goal, client_kind)
 from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
@@ -122,6 +123,13 @@ class CausalObjectAgent(Agent):
         self._llm_calls = 0
         self._llm_max = int(os.environ.get("CAUSAL_LLM_MAX_CALLS", "100000"))
         self._repair_max = int(os.environ.get("CAUSAL_REPAIR", "1"))
+        # Score-max Lever #2: politica de raciocinio direto passo-a-passo
+        self._direct_on = os.environ.get("CAUSAL_DIRECT", "0") != "0"
+        self._direct_cooldown = int(os.environ.get("CAUSAL_DIRECT_COOLDOWN", "2"))
+        self._since_direct = 10 ** 9      # como _since_query: consulta no 1o frame elegivel
+        self._last_effect_kind = None     # efeito real da ultima acao (feedback do prompt)
+        self._direct_calls = 0
+        self._direct_hits = 0
         if self._llm_on:      # log de boot: 'null' = LLM não subiu (degradou p/ fallback)
             print(f"[causal] LLM ativo: {self._llm_kind} (max_calls={self._llm_max})")
         self._goal = None
@@ -202,6 +210,7 @@ class CausalObjectAgent(Agent):
             self._pending_log = None
             self._hud = HudMask()
             self._prev_grid = None
+            self._last_effect_kind = None
             if need_reset:
                 return GameAction.RESET
 
@@ -226,9 +235,11 @@ class CausalObjectAgent(Agent):
                 # os aprendizes de dinâmica com uma transição decisão→init fabricada.
                 self._novelty.record_goal_anchor(state_signature(self._prev_scene))
                 self._goal = None                     # nível cumprido → re-planejar
+                self._last_effect_kind = None
             else:
                 # transição DECISÃO→DECISÃO: alimenta retrodição + f_τ/η + movimento + forward
                 self._buffer.append((self._prev_scene, self._last_key, actual.kind))
+                self._last_effect_kind = actual.kind
                 self._observe_types(self._prev_scene, scene, self._last_key)
                 self._track_rprog(scene)          # B′: delta de reward real por ação
                 self._track_cover()               # cobertura: conta a ação tomada
@@ -252,8 +263,9 @@ class CausalObjectAgent(Agent):
         moves = self._move.moves()
         # (1) consulta esparsa ao LLM: só se ligado, sem meta ativa e passado o cooldown
         self._since_query += 1
+        self._since_direct += 1
         if (self._llm_on and self._goal is None and self._since_query >= QUERY_COOLDOWN
-                and self._llm_calls < self._llm_max):
+                and self._llm_calls < self._llm_max and not self._direct_on):
             self._llm_calls += 1
             dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
             prompt = build_prompt(scene, dyn)
@@ -284,8 +296,11 @@ class CausalObjectAgent(Agent):
                 self._try_learn_reward(scene)      # A: sintetiza predicado de meta
             self._since_type = 0
         cand = None
+        # (0) Score-max Lever #2: raciocinio direto passo-a-passo (topo da pilha)
+        if self._direct_on:
+            cand = self._direct_decide(scene, avail, keymap, moves)
         # (2) meta do LLM com validação
-        if self._goal is not None:
+        if cand is None and self._goal is not None:
             self._goal_age += 1
             gkey = execute_goal(self._goal, scene, moves)
             if gkey is not None and gkey in keymap:
@@ -402,6 +417,30 @@ class CausalObjectAgent(Agent):
             if r is not None:                    # achou ação que melhora o valor
                 self._iw_goal_hits += 1
         return r
+
+    def _direct_decide(self, scene, avail, keymap, moves):
+        """Score-max Lever #2: consulta o LLM pela PROXIMA acao imediata (esparso via
+        cooldown), valida contra keymap (available-guard) e devolve o candidato. Miss ou
+        erro -> None (cai na pilha deterministica). Exception-safe."""
+        if self._since_direct < self._direct_cooldown:
+            return None
+        if self._llm_calls >= self._llm_max:
+            return None
+        self._since_direct = 0
+        self._llm_calls += 1
+        self._direct_calls += 1
+        dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
+        last = {"key": self._last_key, "effect": self._last_effect_kind}
+        try:
+            resp = self._llm.complete(build_direct_prompt(scene, dyn, last))
+            g = parse_goal(resp)
+            key = execute_goal(g, scene, moves) if g is not None else None
+        except Exception:
+            return None
+        cand = keymap.get(key) if key is not None else None
+        if cand is not None:
+            self._direct_hits += 1
+        return cand
 
     def _eval_reward_real(self, scene):
         """Diag (b)vs(c): avalia a reward_fn aprendida na cena REAL observada.
@@ -642,6 +681,8 @@ class CausalObjectAgent(Agent):
             "reward_real_evals": self._reward_real_evals,
             "rprog_actions": sum(1 for r in self._rprog.values() if r[1] and r[0] / r[1] > 0),
             "rprog_fires": self._rprog_fires,
+            "direct_calls": self._direct_calls,
+            "direct_hits": self._direct_hits,
             "eta_rows": len(self._etable.rows),
         }
 
