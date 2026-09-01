@@ -174,7 +174,9 @@ def make_llm_client(model_path=None) -> LLMClient:
         try:
             return HFClient(model_path)
         except Exception:
-            pass
+            import traceback
+            print("[causal] HFClient FALHOU ao carregar o modelo:")
+            traceback.print_exc()
     return NullLLMClient()
 
 
