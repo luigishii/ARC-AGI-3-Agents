@@ -82,9 +82,15 @@ def build_offline_notebook(sources):
         "                       '-> os .py dos jogos nao vem no container offline')\n"
         "env_dir = os.path.dirname(os.path.commonprefix(metas))\n"
         "print('ENVIRONMENTS_DIR =', env_dir, '(%d metadata.json)' % len(metas))\n"
+        "_bld = glob.glob('/kaggle/working/hfcache/hub/models--kernels-community--"
+        "triton_kernels/snapshots/*/build')\n"
+        "_lk = os.path.dirname(_bld[0]) if _bld else ''\n"
+        "print('LOCAL_KERNELS ->', _lk or 'NAO ACHOU build/ (gpt-oss vai falhar)')\n"
         f"with open({REPO!r} + '/.env', 'w') as f:\n"
         f"    f.write({OFFLINE_ENV!r} + 'ENVIRONMENTS_DIR=' + env_dir + '\\n'\n"
-        "            + 'HF_HOME=/kaggle/working/hfcache\\n')\n"   # override: cache gravavel
+        "            + 'HF_HOME=/kaggle/working/hfcache\\n'\n"
+        "            + ('LOCAL_KERNELS=kernels-community/triton_kernels=' + _lk + '\\n'"
+        " if _lk else ''))\n"   # override: cache gravavel
         "os.environ['OPERATION_MODE'] = 'offline'\n"
         "os.environ['ENVIRONMENTS_DIR'] = env_dir\n"
         "from arc_agi import Arcade, OperationMode\n"
