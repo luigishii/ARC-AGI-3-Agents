@@ -283,7 +283,7 @@ def build_direct_prompt(scene, dyn, last=None) -> str:
     ultima acao, e pede UMA proxima acao. O parsing reusa parse_goal; exec reusa execute_goal."""
     dyn = dyn or {}
     lines = ["GRID (1 char = cor 0-f; linha = y de cima->baixo, coluna = x):",
-             grid_to_ascii(scene.grid),
+             grid_to_ascii(getattr(scene, "grid", None)),
              f"OBJETOS ({len(scene.objects)}):"]
     for o in scene.objects:
         lines.append(
