@@ -24,7 +24,8 @@ from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
 from .iw import iw_plan
 from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
-                    value_fn_from_reward, accept_reward, grounded_reward_fn)
+                    value_fn_from_reward, accept_reward, grounded_reward_fn,
+                    grounded_multi_reward_fn)
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
@@ -38,7 +39,7 @@ REWARD_DEFER_MAX = 4      # ticks elegíveis a esperar o avatar antes de sinteti
 def _obj_state(o) -> dict:
     """Estado mecânico serializável de um objeto p/ as regras f_τ (x=col, y=row)."""
     return {"x": int(round(o.centroid[1])), "y": int(round(o.centroid[0])),
-            "color": int(o.color), "shape": o.shape_hash}
+            "color": int(o.color), "shape": o.shape_hash, "size": int(o.size)}
 
 
 def _spatial_context(objects) -> str:
@@ -655,7 +656,15 @@ class CausalObjectAgent(Agent):
                     self._reward_fn = grounded_reward_fn(ac, tc)
                     self._reward_src = f"grounded:-dist(cor{ac}->cor{tc})"
                     return True
-            # grounded on mas sem avatar/alvo ainda -> cai no LLM (fallback)
+            # sem avatar claro (classe ALINHAMENTO: sokoban/manipulacao) -> reward
+            # multi-objeto por cor (marcador<->alvo), excluindo HUD/parede grandes.
+            same = sum(1 for c in set(o.color for o in objs)
+                       if sum(1 for o in objs if o.color == c and o.size <= 64) >= 2)
+            if same:
+                self._reward_fn = grounded_multi_reward_fn()
+                self._reward_src = "grounded:multi-align(same-color,small)"
+                return True
+            # grounded on mas sem estrutura util -> cai no LLM (fallback)
         states = [[(o.shape_hash, _obj_state(o)) for o in sc.objects]
                   for (sc, _k, _e) in self._buffer]
         states.append([(o.shape_hash, _obj_state(o)) for o in scene.objects])

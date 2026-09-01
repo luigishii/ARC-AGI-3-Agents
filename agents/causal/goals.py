@@ -80,6 +80,28 @@ def grounded_reward_fn(avatar_color, target_color):
     return reward_function
 
 
+def grounded_multi_reward_fn(max_size=64):
+    """Reward por-classe p/ ALINHAMENTO/POSICIONAMENTO (sokoban/manipulacao, docs/GAMES.md):
+    soma da menor distancia par-a-par entre objetos PEQUENOS de MESMA cor (marcador<->alvo,
+    caixa<->destino). Exclui blocos grandes (HUD/parede/fundo, size>max_size) — o erro que
+    a reward chutada pelo LLM cometia. goal_flag quando tudo coincide (soma==0). Safe."""
+    def reward_function(state):
+        try:
+            byc = {}
+            for _, o in state:
+                if o.get("size", 10 ** 9) <= max_size:
+                    byc.setdefault(o["color"], []).append(o)
+            total = 0
+            for objs in byc.values():
+                if len(objs) >= 2:
+                    total += min(abs(a["x"] - b["x"]) + abs(a["y"] - b["y"])
+                                 for i, a in enumerate(objs) for b in objs[i + 1:])
+            return (-float(total), total == 0)
+        except Exception:
+            return (0.0, False)
+    return reward_function
+
+
 def accept_reward(source, sample_states, min_states=3):
     """Aceitação COMPORTAMENTAL da reward: avalia em estados reais e rejeita patológicas.
     Retorna (aceito, motivo). Cold-start: < min_states estados -> aceita (bootstrap)."""
