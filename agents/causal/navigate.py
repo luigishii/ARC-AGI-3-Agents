@@ -5,16 +5,21 @@ from collections import Counter
 
 
 def _moved_object(prev, curr):
+    # isola o mover RÍGIDO (forma+tamanho preservados = avatar transladando); ignora a barra
+    # de HUD que encolhe (muda size/shape) — senão >1 objeto "move" e o avatar nunca é aprendido.
     prevmap = {o.id: o for o in prev.objects}
-    moved = []
+    rigid = []
     for o in curr.objects:
         po = prevmap.get(o.id)
-        if po is not None:
-            dr = round(o.centroid[0] - po.centroid[0])
-            dc = round(o.centroid[1] - po.centroid[1])
-            if (dr, dc) != (0, 0):
-                moved.append((o.id, (dr, dc)))
-    return moved[0] if len(moved) == 1 else None
+        if po is None:
+            continue
+        dr = round(o.centroid[0] - po.centroid[0])
+        dc = round(o.centroid[1] - po.centroid[1])
+        if (dr, dc) == (0, 0):
+            continue
+        if o.shape_hash == po.shape_hash and o.size == po.size:
+            rigid.append((o.id, (dr, dc)))
+    return rigid[0] if len(rigid) == 1 else None
 
 
 class MovementModel:
