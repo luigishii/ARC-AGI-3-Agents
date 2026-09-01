@@ -17,7 +17,10 @@ MODULES = [
 # Caminho do dataset de pesos do LLM no Kaggle. O usuário anexa o dataset ao
 # notebook e edita este valor para o slug do seu dataset, depois regenera o
 # notebook (uv run python kaggle/build_notebook.py).
-MODEL_DATASET_PATH = "/kaggle/input/models/qwen-lm/qwen-3/transformers/32b/1"
+# >>> EDITE AQUI <<< com o slug real do gpt-oss-120b anexado (catalogo Kaggle Models:
+# danielhanchen/gpt-oss-120b). O path DEVE conter "gpt-oss" -> ativa o modo Harmony
+# automaticamente (llm._should_use_harmony): chat template de raciocinio + canal final.
+MODEL_DATASET_PATH = "/kaggle/input/gpt-oss-120b/transformers/mxfp4/1"
 
 TRIMMED_INIT = (
     "from typing import Type\n"
@@ -47,6 +50,7 @@ ENV = (
     "CAUSAL_COVER=1\n"       # exploração por cobertura + anti-fixação
     "CAUSAL_FIX=1\n"        # guarda global anti-fixação
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
+    "CAUSAL_EFFORT=medium\n"  # gpt-oss: esforco de raciocinio (low|medium|high) no Harmony
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 

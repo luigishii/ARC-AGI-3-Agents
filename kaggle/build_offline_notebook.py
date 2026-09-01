@@ -29,6 +29,7 @@ OFFLINE_ENV = (
     "CAUSAL_COVER=1\n"       # exploração por cobertura + anti-fixação
     "CAUSAL_FIX=1\n"        # guarda global anti-fixação
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
+    "CAUSAL_EFFORT=medium\n"  # gpt-oss: esforco de raciocinio (low|medium|high) no Harmony
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 

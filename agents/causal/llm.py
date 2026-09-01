@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
 from collections import Counter
 
@@ -25,6 +27,37 @@ _DIRECT_INSTRUCTION = (
     '{"type":"press","action":"ACTIONk"}   (k da lista disponivel)\n'
     '{"type":"click_cell","gx":0,"gy":0}   (gx,gy em 0..5 = celula do grid 6x6)'
 )
+
+
+_HARMONY_TOKEN = re.compile(r"<\|[^|>]*\|>")
+_HARMONY_FINAL = "<|channel|>final<|message|>"
+_HARMONY_TERMS = ("<|return|>", "<|end|>", "<|start|>")
+
+
+def _should_use_harmony(model_path) -> bool:
+    """gpt-oss usa o formato Harmony (CoT no canal analysis, resposta no final);
+    Qwen e demais nao. Detecta pelo slug do modelo."""
+    return bool(model_path) and "gpt-oss" in str(model_path).lower()
+
+
+def _strip_harmony_markers(s: str) -> str:
+    return _HARMONY_TOKEN.sub("", s)
+
+
+def extract_final_channel(text: str) -> str:
+    """Isola o conteudo do canal `final` do Harmony (a resposta), descartando o
+    canal `analysis` (a cadeia de raciocinio). Sem marcadores (modelo nao-harmony)
+    -> devolve o texto limpo como veio. Robusto a alucinacao: o `parse_goal` a
+    jusante ainda extrai o JSON."""
+    i = text.rfind(_HARMONY_FINAL)
+    if i == -1:
+        return _strip_harmony_markers(text).strip()
+    seg = text[i + len(_HARMONY_FINAL):]
+    for term in _HARMONY_TERMS:
+        j = seg.find(term)
+        if j != -1:
+            seg = seg[:j]
+    return _strip_harmony_markers(seg).strip()
 
 
 class LLMClient:
@@ -79,36 +112,58 @@ class HFClient(LLMClient):
         except Exception:
             self._model = AutoModelForCausalLM.from_pretrained(
                 model_path, dtype=torch.float16, device_map="auto")   # transformers 5.x: dtype
-        self._max = max_tokens
+        self._harmony = _should_use_harmony(model_path)
+        # gpt-oss RACIOCINA (canal analysis) antes do canal final -> precisa de orcamento
+        # de tokens p/ ALCANCAR o final; Qwen roda com enable_thinking=False (curto).
+        self._max = max(max_tokens, 2048) if self._harmony else max_tokens
         self._gen_lock = threading.Lock()   # serializa generate entre threads do Swarm
 
     def complete(self, prompt: str) -> str:
         import torch
         with self._gen_lock:                # model.generate não é thread-safe concorrente
             msgs = [{"role": "user", "content": prompt}]
-            try:  # Qwen3 pensa por padrão (<think>…</think>) e gasta os tokens; desliga.
-                enc = self._tok.apply_chat_template(
-                    msgs, add_generation_prompt=True, return_tensors="pt",
-                    enable_thinking=False)
-            except TypeError:  # modelos sem esse kwarg (ex: Qwen2.5) ignoram e seguem
-                enc = self._tok.apply_chat_template(
-                    msgs, add_generation_prompt=True, return_tensors="pt")
+            if self._harmony:
+                # gpt-oss: aplica esforco de raciocinio; decodifica COM marcadores de
+                # canal e extrai SO o canal `final` (a resposta), descartando o CoT.
+                effort = os.environ.get("CAUSAL_EFFORT", "medium")
+                try:
+                    enc = self._tok.apply_chat_template(
+                        msgs, add_generation_prompt=True, return_tensors="pt",
+                        reasoning_effort=effort)
+                except TypeError:
+                    enc = self._tok.apply_chat_template(
+                        msgs, add_generation_prompt=True, return_tensors="pt")
+            else:
+                try:  # Qwen3 pensa por padrão (<think>…</think>) e gasta os tokens; desliga.
+                    enc = self._tok.apply_chat_template(
+                        msgs, add_generation_prompt=True, return_tensors="pt",
+                        enable_thinking=False)
+                except TypeError:  # modelos sem esse kwarg (ex: Qwen2.5) ignoram e seguem
+                    enc = self._tok.apply_chat_template(
+                        msgs, add_generation_prompt=True, return_tensors="pt")
             ids = enc.input_ids if hasattr(enc, "input_ids") else enc   # 5.x: dict -> tensor
             ids = ids.to(self._model.device)
             attn = torch.ones_like(ids)                                 # evita warning pad==eos
             with torch.no_grad():
                 out = self._model.generate(ids, attention_mask=attn,
                                            max_new_tokens=self._max, do_sample=False)
+            if self._harmony:  # preserva marcadores p/ isolar o canal final
+                text = self._tok.decode(out[0][ids.shape[1]:], skip_special_tokens=False)
+                return extract_final_channel(text)
             return self._tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)
 
 
 def make_llm_client(model_path=None) -> LLMClient:
-    """vLLM → transformers+4bit → NullLLMClient. Nunca levanta."""
+    """vLLM → transformers+4bit → NullLLMClient. Nunca levanta.
+    gpt-oss (Harmony) pula o vLLM: o VLLMClient manda prompt cru sem chat template e
+    o suporte Harmony do vLLM ainda e imaturo -> vai direto pro HFClient, que aplica
+    o template Harmony + reasoning_effort e isola o canal final."""
     if model_path:
-        try:
-            return VLLMClient(model_path)
-        except Exception:
-            pass
+        if not _should_use_harmony(model_path):
+            try:
+                return VLLMClient(model_path)
+            except Exception:
+                pass
         try:
             return HFClient(model_path)
         except Exception:
