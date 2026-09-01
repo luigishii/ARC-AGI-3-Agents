@@ -22,6 +22,14 @@ MODULES = [
 # automaticamente (llm._should_use_harmony): chat template de raciocinio + canal final.
 MODEL_DATASET_PATH = "/kaggle/input/models/danielhanchen/gpt-oss-120b/transformers/default/1"
 
+# gpt-oss MXFP4: os kernels vem da lib HF `kernels` + o repo kernels-community/triton_kernels
+# (torch-universal, ~536KB). Air-gapped: com internet ON o usuario faz
+#   pip download kernels huggingface_hub -d ./offline_wheels
+#   HF_HOME=./hf_cache python -c "from huggingface_hub import snapshot_download; snapshot_download('kernels-community/triton_kernels')"
+# e sobe ./offline_wheels e ./hf_cache como 2 datasets. >>> EDITE AQUI <<< com os slugs reais.
+KERNELS_WHEELS = "/kaggle/input/gpt-oss-kernels-wheels"   # dir com os wheels de kernels+huggingface_hub
+HF_CACHE_HOME = "/kaggle/input/gpt-oss-hf-cache"          # HF_HOME com o snapshot de triton_kernels
+
 TRIMMED_INIT = (
     "from typing import Type\n"
     "from dotenv import load_dotenv\n"
@@ -51,6 +59,9 @@ ENV = (
     "CAUSAL_FIX=1\n"        # guarda global anti-fixação
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
     "CAUSAL_EFFORT=medium\n"  # gpt-oss: esforco de raciocinio (low|medium|high) no Harmony
+    "HF_HUB_OFFLINE=1\n"       # kernels/hub sem rede: le so o cache local
+    "TRANSFORMERS_OFFLINE=1\n"
+    "HF_HOME=" + HF_CACHE_HOME + "\n"   # cache com o repo kernels-community/triton_kernels
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
@@ -73,7 +84,10 @@ def _cell(src):
 
 
 def build_notebook(sources):
-    cell0 = "!pip install --no-index --find-links %s arc-agi python-dotenv\n" % WHEELS
+    cell0 = (
+        "!pip install --no-index --find-links %s arc-agi python-dotenv\n" % WHEELS
+        + "!pip install --no-index --find-links %s kernels huggingface_hub || "
+        "echo 'kernels wheels ausentes -> gpt-oss cairia em bf16'\n" % KERNELS_WHEELS)
     cell1 = (
         "import os, shutil, base64\n"
         "if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):\n"

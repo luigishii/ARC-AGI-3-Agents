@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # torna build_notebook importavel
 from build_notebook import (  # noqa: E402
     WHEELS, REPO, COMP_REPO, TRIMMED_INIT, MODEL_DATASET_PATH,
+    KERNELS_WHEELS, HF_CACHE_HOME,
     read_sources, _cell, _repo_root,
 )
 
@@ -30,6 +31,9 @@ OFFLINE_ENV = (
     "CAUSAL_FIX=1\n"        # guarda global anti-fixação
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
     "CAUSAL_EFFORT=medium\n"  # gpt-oss: esforco de raciocinio (low|medium|high) no Harmony
+    "HF_HUB_OFFLINE=1\n"       # kernels/hub sem rede: le so o cache local
+    "TRANSFORMERS_OFFLINE=1\n"
+    "HF_HOME=" + HF_CACHE_HOME + "\n"   # cache com o repo kernels-community/triton_kernels
     "QWEN_MODEL_PATH=" + MODEL_DATASET_PATH + "\n"
 )
 
@@ -44,7 +48,10 @@ def build_offline_notebook(sources):
     # HTTP). O copytree traz o main.py da competicao; nossos FILES o sobrescrevem.
     with open(os.path.join(_repo_root(), "main.py"), "rb") as f:
         sources = {**sources, "main.py": base64.b64encode(f.read()).decode()}
-    cell0 = "!pip install --no-index --find-links %s arc-agi python-dotenv\n" % WHEELS
+    cell0 = (
+        "!pip install --no-index --find-links %s arc-agi python-dotenv\n" % WHEELS
+        + "!pip install --no-index --find-links %s kernels huggingface_hub || "
+        "echo 'kernels wheels ausentes -> gpt-oss cairia em bf16'\n" % KERNELS_WHEELS)
     cell1 = (
         "import os, shutil, base64, glob\n"
         f"shutil.copytree({COMP_REPO!r}, {REPO!r}, dirs_exist_ok=True)\n"

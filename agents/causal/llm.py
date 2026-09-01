@@ -101,18 +101,25 @@ class HFClient(LLMClient):
         _iu.is_torchvision_available = lambda *a, **k: False
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer  # lazy
-        self._tok = AutoTokenizer.from_pretrained(model_path)
-        try:
-            from transformers import BitsAndBytesConfig
-            import bitsandbytes  # noqa: F401 — só usa 4-bit se a lib existir
-            bnb = BitsAndBytesConfig(load_in_4bit=True,
-                                     bnb_4bit_compute_dtype=torch.float16)
-            self._model = AutoModelForCausalLM.from_pretrained(
-                model_path, quantization_config=bnb, device_map="auto")
-        except Exception:
-            self._model = AutoModelForCausalLM.from_pretrained(
-                model_path, dtype=torch.float16, device_map="auto")   # transformers 5.x: dtype
         self._harmony = _should_use_harmony(model_path)
+        self._tok = AutoTokenizer.from_pretrained(model_path)
+        if self._harmony:
+            # gpt-oss ja vem em MXFP4 (~63GB, cabe). dtype="auto" preserva a quantizacao
+            # (float16 forcaria dequant p/ bf16 ~234GB -> OOM); os kernels MXFP4 vem da
+            # lib HF `kernels` (repo kernels-community/triton_kernels, cacheado offline).
+            self._model = AutoModelForCausalLM.from_pretrained(
+                model_path, dtype="auto", device_map="cuda")
+        else:
+            try:
+                from transformers import BitsAndBytesConfig
+                import bitsandbytes  # noqa: F401 — só usa 4-bit se a lib existir
+                bnb = BitsAndBytesConfig(load_in_4bit=True,
+                                         bnb_4bit_compute_dtype=torch.float16)
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    model_path, quantization_config=bnb, device_map="auto")
+            except Exception:
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    model_path, dtype=torch.float16, device_map="auto")   # transformers 5.x: dtype
         # gpt-oss RACIOCINA (canal analysis) antes do canal final -> precisa de orcamento
         # de tokens p/ ALCANCAR o final; Qwen roda com enable_thinking=False (curto).
         self._max = max(max_tokens, 2048) if self._harmony else max_tokens
