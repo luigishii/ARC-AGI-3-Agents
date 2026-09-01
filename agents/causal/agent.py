@@ -69,6 +69,35 @@ def _spatial_context(objects) -> str:
     return "\n".join(lines)
 
 
+def _pick_target(objects, avatar_idx):
+    """Alvo provável: objeto não-avatar, cor rara, compacto (não fundo/barra). Índice ou None."""
+    objs = list(objects)[:8]
+    cand = [i for i in range(len(objs)) if i != avatar_idx]
+    if not cand:
+        return None
+    color_count = {}
+    for o in objs:
+        color_count[o.color] = color_count.get(o.color, 0) + 1
+    largest = max(cand, key=lambda i: objs[i].size)
+    cand2 = [i for i in cand if i != largest] or cand
+
+    def _elongated(i):
+        r0, c0, r1, c1 = objs[i].bbox
+        w, h = c1 - c0 + 1, r1 - r0 + 1
+        return max(w, h) / max(1, min(w, h)) >= 4
+
+    cand3 = [i for i in cand2 if not _elongated(i)] or cand2
+    av = objs[avatar_idx]
+    ax, ay = av.centroid[1], av.centroid[0]
+
+    def _key(i):
+        o = objs[i]
+        dist = abs(o.centroid[1] - ax) + abs(o.centroid[0] - ay)
+        return (color_count[o.color], o.size, dist)
+
+    return min(cand3, key=_key)
+
+
 class CausalObjectAgent(Agent):
     """Agente objeto-cêntrico causal (v1). Ver docs/superpowers/specs/2026-08-27-causal-object-agent-design.md."""
 
@@ -487,11 +516,46 @@ class CausalObjectAgent(Agent):
                 if o.id == aid:
                     avatar_idx = i
                     break
+        target_idx = (_pick_target(scene.objects, avatar_idx)
+                      if avatar_idx is not None else None)
         ai = avatar_idx if avatar_idx is not None else 0
-        ground = ""
-        if avatar_idx is not None:
+        if avatar_idx is not None and target_idx is not None:
+            ground = (f"OBJETO CONTROLAVEL (avatar) = state[{avatar_idx}]. "
+                      f"ALVO PROVAVEL = state[{target_idx}] (objeto raro/compacto, distinto do avatar). "
+                      f"A reward DEVE medir a distancia state[{avatar_idx}] -> state[{target_idx}].\n")
+            few = (
+                f"  # avatar (state[{avatar_idx}]) se aproxima do alvo (state[{target_idx}])\n"
+                "  def reward_function(state):\n"
+                "      pts=[b for _,b in state]\n"
+                f"      if len(pts)<={max(avatar_idx, target_idx)}: return (0.0, False)\n"
+                f"      a=pts[{avatar_idx}]; t=pts[{target_idx}]\n"
+                "      d=abs(a['x']-t['x'])+abs(a['y']-t['y'])\n"
+                "      return (-float(d), d==0)\n"
+            )
+        elif avatar_idx is not None:
             ground = (f"OBJETO CONTROLAVEL (avatar) = state[{avatar_idx}]; a reward DEVE "
                       f"medir a distancia DELE (state[{avatar_idx}]) ate o alvo.\n")
+            few = (
+                f"  # distancia: o avatar (state[{ai}]) se aproxima do alvo mais proximo\n"
+                "  def reward_function(state):\n"
+                "      pts=[b for _,b in state]\n"
+                "      if len(pts)<2: return (0.0, False)\n"
+                f"      a=pts[{ai}]\n"
+                f"      others=[c for k,c in enumerate(pts) if k!={ai}]\n"
+                "      d=min(abs(a['x']-c['x'])+abs(a['y']-c['y']) for c in others)\n"
+                "      return (-float(d), d==0)\n"
+            )
+        else:
+            ground = ""
+            few = (
+                "  # distancia: objeto[0] se aproxima do alvo mais proximo\n"
+                "  def reward_function(state):\n"
+                "      pts=[b for _,b in state]\n"
+                "      if len(pts)<2: return (0.0, False)\n"
+                "      a=pts[0]\n"
+                "      d=min(abs(a['x']-b['x'])+abs(a['y']-b['y']) for b in pts[1:])\n"
+                "      return (-float(d), d==0)\n"
+            )
         return (
             "Infira reward_function(state) que retorna (reward, goal_flag). REGRAS: "
             "(1) reward é um número GRADUADO — maior = mais perto de resolver, NÃO use só 0/1; "
@@ -503,14 +567,7 @@ class CausalObjectAgent(Agent):
             f"{ctx}\n"
             f"{ground}"
             "EXEMPLOS (reward espacial, só usam o state, sem import):\n"
-            f"  # distancia: o avatar (state[{ai}]) se aproxima do alvo mais proximo\n"
-            "  def reward_function(state):\n"
-            "      pts=[b for _,b in state]\n"
-            "      if len(pts)<2: return (0.0, False)\n"
-            f"      a=pts[{ai}]\n"
-            f"      others=[c for k,c in enumerate(pts) if k!={ai}]\n"
-            "      d=min(abs(a['x']-c['x'])+abs(a['y']-c['y']) for c in others)\n"
-            "      return (-float(d), d==0)\n"
+            f"{few}"
             "  # arranjo: quantos objetos alinhados na mesma linha (y) do alvo\n"
             "  def reward_function(state):\n"
             "      pts=[b for _,b in state]\n"
