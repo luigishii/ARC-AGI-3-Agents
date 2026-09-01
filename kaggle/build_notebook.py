@@ -27,8 +27,8 @@ MODEL_DATASET_PATH = "/kaggle/input/models/danielhanchen/gpt-oss-120b/transforme
 #   pip download kernels huggingface_hub -d ./offline_wheels
 #   HF_HOME=./hf_cache python -c "from huggingface_hub import snapshot_download; snapshot_download('kernels-community/triton_kernels')"
 # e sobe ./offline_wheels e ./hf_cache como 2 datasets. >>> EDITE AQUI <<< com os slugs reais.
-KERNELS_WHEELS = "/kaggle/input/gpt-oss-kernels-wheels"   # dir com os wheels de kernels+huggingface_hub
-HF_CACHE_HOME = "/kaggle/input/gpt-oss-hf-cache"          # HF_HOME com o snapshot de triton_kernels
+KERNELS_WHEELS = "/kaggle/input/gpt-oss-offline-kernels/offline_wheels"  # wheels kernels+hub
+HF_CACHE_HOME = "/kaggle/input/gpt-oss-offline-kernels/hf_cache"         # HF_HOME (contem hub/)
 
 TRIMMED_INIT = (
     "from typing import Type\n"
