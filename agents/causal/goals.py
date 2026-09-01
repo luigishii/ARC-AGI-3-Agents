@@ -60,6 +60,26 @@ def value_fn_from_reward(reward_fn):
     return value
 
 
+def grounded_reward_fn(avatar_color, target_color):
+    """Reward GROUNDED (calculada, NÃO chutada pelo LLM): -manhattan(avatar, alvo),
+    ancorada por COR (estável entre frames, ao contrário de índice). goal_flag quando
+    distância==0. Exception-safe (entrada ruim -> (0,False)). Lição do docs/GAMES.md:
+    a vitória é sempre espacial/grounded, nunca contagem-de-cor."""
+    def reward_function(state):
+        try:
+            objs = [a for _, a in state]
+            av = [o for o in objs if o.get("color") == avatar_color]
+            tg = [o for o in objs if o.get("color") == target_color]
+            if not av or not tg:
+                return (0.0, False)
+            a, t = av[0], tg[0]
+            d = abs(a["x"] - t["x"]) + abs(a["y"] - t["y"])
+            return (-float(d), d == 0)
+        except Exception:
+            return (0.0, False)
+    return reward_function
+
+
 def accept_reward(source, sample_states, min_states=3):
     """Aceitação COMPORTAMENTAL da reward: avalia em estados reais e rejeita patológicas.
     Retorna (aceito, motivo). Cold-start: < min_states estados -> aceita (bootstrap)."""

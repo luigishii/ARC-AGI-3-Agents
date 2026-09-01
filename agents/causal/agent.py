@@ -24,7 +24,7 @@ from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
 from .iw import iw_plan
 from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
-                    value_fn_from_reward, accept_reward)
+                    value_fn_from_reward, accept_reward, grounded_reward_fn)
 
 QUERY_COOLDOWN = 8
 GOAL_FAIL_MAX = 3
@@ -175,6 +175,7 @@ class CausalObjectAgent(Agent):
         self._cover = {}              # action_key -> nº de vezes tomada (exploração por cobertura)
         self._cover_on = os.environ.get("CAUSAL_COVER", "0") != "0"
         self._clickmap = os.environ.get("CAUSAL_CLICKMAP", "0") != "0"
+        self._grounded = os.environ.get("CAUSAL_GROUNDED", "0") != "0"
         self._fix_run = 0             # repetições consecutivas da MESMA key escolhida
         self._fix_breaks = 0          # diag: vezes que o guarda quebrou uma fixação
         self._fix_on = os.environ.get("CAUSAL_FIX", "0") != "0"
@@ -640,6 +641,21 @@ class CausalObjectAgent(Agent):
         estados reais). Self-repair com o motivo da rejeição até CAUSAL_REPAIR vezes."""
         if self._reward_fn is not None:
             return False
+        # GROUNDED: reward CALCULADA (nao chutada pelo LLM). Se o avatar (aprendido) e
+        # um alvo (raro/compacto) sao conhecidos, usa -manhattan(avatar,alvo) por cor.
+        # A vitoria no AGI-3 e sempre espacial (docs/GAMES.md), nunca contagem-de-cor.
+        if self._grounded:
+            aid = self._move.avatar_id()
+            objs = list(scene.objects)
+            avatar_idx = next((i for i, o in enumerate(objs[:8]) if o.id == aid), None)
+            if avatar_idx is not None:
+                tidx = _pick_target(scene.objects, avatar_idx)
+                if tidx is not None:
+                    ac, tc = objs[avatar_idx].color, objs[tidx].color
+                    self._reward_fn = grounded_reward_fn(ac, tc)
+                    self._reward_src = f"grounded:-dist(cor{ac}->cor{tc})"
+                    return True
+            # grounded on mas sem avatar/alvo ainda -> cai no LLM (fallback)
         states = [[(o.shape_hash, _obj_state(o)) for o in sc.objects]
                   for (sc, _k, _e) in self._buffer]
         states.append([(o.shape_hash, _obj_state(o)) for o in scene.objects])
