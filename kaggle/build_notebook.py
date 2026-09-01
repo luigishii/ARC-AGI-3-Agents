@@ -20,7 +20,7 @@ MODULES = [
 # >>> EDITE AQUI <<< com o slug real do gpt-oss-120b anexado (catalogo Kaggle Models:
 # danielhanchen/gpt-oss-120b). O path DEVE conter "gpt-oss" -> ativa o modo Harmony
 # automaticamente (llm._should_use_harmony): chat template de raciocinio + canal final.
-MODEL_DATASET_PATH = "/kaggle/input/gpt-oss-120b/transformers/mxfp4/1"
+MODEL_DATASET_PATH = "/kaggle/input/models/danielhanchen/gpt-oss-120b/transformers/default/1"
 
 TRIMMED_INIT = (
     "from typing import Type\n"
