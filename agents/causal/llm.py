@@ -181,7 +181,6 @@ def build_direct_prompt(scene, dyn, last=None) -> str:
             f"Sua ultima acao {last['key']} produziu: {eff}. Escolha a PROXIMA "
             "acao que faz PROGRESSO; NAO repita uma acao que nao mudou nada."
         )
-        lines.append("PROGRESSO OBSERVADO:")
     lines.append(_DIRECT_INSTRUCTION)
     return "\n".join(lines)
 
