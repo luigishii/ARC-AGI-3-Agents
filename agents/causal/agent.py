@@ -437,6 +437,12 @@ class CausalObjectAgent(Agent):
             return None
         if self._llm_calls >= self._llm_max:
             return None
+        # Click-only: LLM nao sabe raciocinar sobre "clique no pixel X,Y"
+        # — so gasta ~60s por chamada com 0 hits. Pula e deixa o policy decidir.
+        has_keyboard = any(not (a if isinstance(a, GameAction)
+                                else GameAction.from_id(a)).is_complex() for a in avail)
+        if not has_keyboard:
+            return None
         self._since_direct = 0
         self._llm_calls += 1
         self._direct_calls += 1
