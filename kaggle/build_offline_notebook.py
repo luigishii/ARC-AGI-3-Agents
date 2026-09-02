@@ -42,7 +42,7 @@ OFFLINE_ENV = (
 # Gargalo #2 RESOLVIDO p/ de-blinding: em vez de 1 subprocesso por jogo (recarrega o 32B
 # 61GB a cada troca e TRAVA), roda UMA chamada de main.py sem --game → o modelo é singleton
 # por processo, carrega 1x e joga o subconjunto OFFLINE_GAMES no MESMO processo.
-OFFLINE_GAMES = "sk48,vc33,ls20,tn36"   # "" = TODOS os 25; ex: "vc33,ls20" (prefixos)
+OFFLINE_GAMES = ""   # "" = TODOS os 25; ex: "vc33,ls20" (prefixos)
 
 
 def build_offline_notebook(sources):

@@ -248,6 +248,14 @@ class CausalObjectAgent(Agent):
                     except (ValueError, IndexError):
                         pass
                 self._stale_count = 0
+                # Limpa dados espaciais do nivel anterior (layout muda entre niveis).
+                # productive_colors, _model e _move persistem (transferem entre niveis).
+                self._rprog.clear()
+                self._rprog_fires = 0
+                self._cover.clear()
+                self._reward_fn = None       # re-sintetiza grounded pro novo layout
+                self._reward_src = None
+                self._reward_defer = 0
                 win_scene = parse(win_grid(latest_frame.frame), hud_mask=self._hud.mask())
                 self._novelty.record_goal_anchor(state_signature(win_scene))
                 self._goal = None                     # nível cumprido → re-planejar
@@ -810,6 +818,8 @@ class CausalObjectAgent(Agent):
             "direct_calls": self._direct_calls,
             "direct_hits": self._direct_hits,
             "eta_rows": len(self._etable.rows),
+            "productive_colors": sorted(self._productive_colors),
+            "stale_count": self._stale_count,
         }
 
     def _rule_error(self, src) -> str:
