@@ -125,6 +125,19 @@ def grounded_pattern_reward_fn(split=32, max_size=64):
     return reward_function
 
 
+def grounded_count_reward_fn(max_size=64):
+    """Reward por-classe p/ SOKOBAN/PEG (docs/GAMES.md): conta objetos pequenos —
+    menos objetos = melhor (pegs removidos) ou mais objetos numa zona = melhor
+    (caixas no alvo). Proxy: -num_objetos_pequenos. goal_flag quando <= 2. Safe."""
+    def reward_function(state):
+        try:
+            n = sum(1 for _, o in state if o.get("size", 10 ** 9) <= max_size)
+            return (-float(n), n <= 2)
+        except Exception:
+            return (0.0, False)
+    return reward_function
+
+
 def accept_reward(source, sample_states, min_states=3):
     """Aceitação COMPORTAMENTAL da reward: avalia em estados reais e rejeita patológicas.
     Retorna (aceito, motivo). Cold-start: < min_states estados -> aceita (bootstrap)."""

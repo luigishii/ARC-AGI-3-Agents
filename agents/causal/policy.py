@@ -161,7 +161,9 @@ class Policy:
         cands = candidates(scene, available_actions, clickmap=clickmap)
         if not cands:
             return None
-        if self._rng.random() < self.epsilon:
+        # Budget awareness: explora mais no inicio, exploita no final
+        eps = self.epsilon * max(0.2, budget_frac)
+        if self._rng.random() < eps:
             return self._rng.choice(cands)
         best, best_s = None, None
         for c in cands:

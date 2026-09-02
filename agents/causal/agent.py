@@ -187,6 +187,10 @@ class CausalObjectAgent(Agent):
         # Deteccao de "preso": acoes consecutivas sem mudanca de estado
         self._stale_count = 0
         self._stale_max = int(os.environ.get("CAUSAL_STALE_MAX", "30"))
+        # Combo memory: sequencias de 2-3 acoes que produziram efeito positivo
+        self._combo_buf = deque(maxlen=5)    # ultimas 5 keys
+        self._combos = {}                     # (key1,key2) -> [delta_sum, count]
+        self._combo_on = os.environ.get("CAUSAL_COMBO", "1") != "0"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -220,6 +224,14 @@ class CausalObjectAgent(Agent):
             self._hud = HudMask()
             self._prev_grid = None
             self._last_effect_kind = None
+            self._stale_count = 0
+            # Limpa dados espaciais stale (layout muda entre tentativas).
+            # productive_colors persiste (cross-nivel).
+            self._rprog.clear()
+            self._rprog_fires = 0
+            self._cover.clear()
+            self._combo_buf.clear()
+            self._combos.clear()
             if need_reset:
                 return GameAction.RESET
 
@@ -253,6 +265,8 @@ class CausalObjectAgent(Agent):
                 self._rprog.clear()
                 self._rprog_fires = 0
                 self._cover.clear()
+                self._combo_buf.clear()
+                self._combos.clear()
                 self._reward_fn = None       # re-sintetiza grounded pro novo layout
                 self._reward_src = None
                 self._reward_defer = 0
@@ -367,18 +381,25 @@ class CausalObjectAgent(Agent):
                 self._goal_fails >= GOAL_FAIL_MAX or self._goal_age >= GOAL_AGE_MAX
             ):
                 self._goal = None
-        # (2b) click-then-keyboard: se a ultima acao foi clique com efeito
-        # (selecao), tenta teclado agora (mover a peca selecionada).
-        # Cobre ka59 (select+push), ar25 (select+move), cn04, sp80, etc.
+        # (2b) two-phase: se a ultima acao foi clique com efeito (selecao/toggle),
+        # tenta a proxima fase — teclado (ka59, ar25, cn04, sp80) OU outro clique
+        # num objeto diferente (r11l: click peca → click destino; lf52: peca→marker).
         if (cand is None and self._last_key is not None
                 and "@c" in (self._last_key or "")
-                and self._last_effect_kind not in (None, "none")
-                and has_keyboard):
-            # Tenta cada direcao pra ver se move a peca selecionada
-            for k in ("ACTION1", "ACTION2", "ACTION3", "ACTION4"):
-                if k in keymap and self._cover.get(k, 0) < 3:
-                    cand = keymap[k]
-                    break
+                and self._last_effect_kind not in (None, "none")):
+            if has_keyboard:
+                # Fase 2 = teclado: tenta cada direcao
+                for k in ("ACTION1", "ACTION2", "ACTION3", "ACTION4"):
+                    if k in keymap and self._cover.get(k, 0) < 3:
+                        cand = keymap[k]
+                        break
+            if cand is None:
+                # Fase 2 = outro clique: escolhe objeto de cor/posicao diferente
+                alt = [c for c in cands if c.key != self._last_key
+                       and c.has_object and c.key != "ACTION6@bg"]
+                if alt:
+                    best = min(alt, key=lambda c: self._cover.get(c.key, 0))
+                    cand = best
         # (3) fallback determinístico: navigate → plan → greedy
         if cand is None and self._nav_on:
             nk = navigate(scene, self._move)
@@ -388,6 +409,16 @@ class CausalObjectAgent(Agent):
             rk = self._rprog_decide(cands)    # B′: progresso model-free por reward real
             if rk is not None:
                 cand = keymap.get(rk)
+        # Combo: se a ultima key faz parte de um combo positivo, executa a 2a key
+        if cand is None and self._combo_on and self._last_key:
+            best_combo_key, best_avg = None, 0.0
+            for (k1, k2), cr in self._combos.items():
+                if k1 == self._last_key and cr[1] >= 2 and cr[0] / cr[1] > best_avg:
+                    if k2 in keymap:
+                        best_avg = cr[0] / cr[1]
+                        best_combo_key = k2
+            if best_combo_key is not None:
+                cand = keymap[best_combo_key]
         # ACTION7 reativo: undo quando a ultima acao piorou o reward (delta < 0).
         # Cobre ar25, lf52, sb26, sk48, su15 — jogos com undo estrategico.
         if (cand is None and self._last_key is not None
@@ -431,9 +462,11 @@ class CausalObjectAgent(Agent):
         if cand is None:
             self._pending_log = None
             return GameAction.RESET
-        # Reset voluntário: se preso (N ações sem efeito), reseta o nível
-        # em vez de desperdiçar o budget restante. Limpa stale e tenta de novo.
-        if self._stale_count >= self._stale_max:
+        # Reset voluntário: se preso (N ações sem efeito), reseta o nível.
+        # Stale_max adaptativo: proporcional ao numero de candidatos (mais opcoes
+        # = mais paciencia). Min 15, max _stale_max (default 30).
+        adaptive_stale = max(15, min(self._stale_max, len(cands) * 3))
+        if self._stale_count >= adaptive_stale:
             self._stale_count = 0
             self._pending_log = None
             return GameAction.RESET
@@ -557,7 +590,15 @@ class CausalObjectAgent(Agent):
         if not (math.isfinite(vb) and math.isfinite(va)):
             return
         row = self._rprog.setdefault(self._last_key, deque(maxlen=10))
-        row.append(va - vb)
+        delta = va - vb
+        row.append(delta)
+        # Combo memory: registra delta da SEQUENCIA (key_anterior, key_atual)
+        if self._combo_on and len(self._combo_buf) >= 1:
+            pair = (self._combo_buf[-1], self._last_key)
+            cr = self._combos.setdefault(pair, [0.0, 0])
+            cr[0] += delta
+            cr[1] += 1
+        self._combo_buf.append(self._last_key)
 
     def _rprog_decide(self, cands):
         """B′: escolhe a ação de maior Δ médio de reward real (>0). Min 3 observações
