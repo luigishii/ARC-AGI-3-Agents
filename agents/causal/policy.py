@@ -45,13 +45,14 @@ def _size_bucket(n: int) -> int:
 
 
 def click_key(scene, x: int, y: int) -> str:
-    """Chave de clique do clickmap (Tufa): keyeia pelo (cor, tamanho-do-bloco) do objeto
-    sob o cursor, NAO pela posicao. Cliques na MESMA classe visual compartilham chave ->
-    o modelo aprende produtividade P(efeito!=none) por classe e para de clicar o inerte
-    (barra HUD/fundo = bloco enorme, cor fixa -> nunca muda). Fundo/vazio -> ACTION6@bg."""
+    """Chave de clique: (cor, tamanho, celula-espacial). Preserva info espacial pra
+    distinguir botoes em posicoes diferentes (fix: vc33 exige clicar botoes distintos),
+    mas embute a classe visual (cor+size) pra diagnostico/agrupamento futuro.
+    Fundo/vazio -> ACTION6@bg (sem posicao: todos os cliques no fundo sao iguais)."""
+    gx, gy = cell_of(x, y)
     for o in scene.objects:
         if (y, x) in o.cells:
-            return f"ACTION6@c{o.color}s{_size_bucket(o.size)}"
+            return f"ACTION6@c{o.color}s{_size_bucket(o.size)}@{gx},{gy}"
     return "ACTION6@bg"
 
 
@@ -82,10 +83,13 @@ def candidates(scene, available_actions, clickmap: bool = False) -> list:
             for gy in range(GRID_N):
                 for gx in range(GRID_N):
                     x, y = cell_center(gx, gy)
-                    # clickmap: chave por (cor,tamanho) do objeto sob o cursor
-                    # (produtividade por classe visual); senao chave por celula 6x6.
-                    key = click_key(scene, x, y) if clickmap else action_key(action, (gx, gy))
                     sz = _object_size_at(scene, x, y)
+                    if clickmap:
+                        if sz > 100:
+                            continue      # HUD/parede/fundo: nem gera candidato
+                        key = click_key(scene, x, y)
+                    else:
+                        key = action_key(action, (gx, gy))
                     out.append(Candidate(action, x, y, key, (gx, gy) in occ, sz))
     return out
 
