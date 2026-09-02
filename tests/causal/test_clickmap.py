@@ -31,7 +31,7 @@ def test_click_key_different_cells_different_keys():
     assert "c7" in k1 and "c7" in k2  # mesma classe visual (cor 7)
 
 
-def test_candidates_clickmap_filters_large_objects():
+def test_candidates_clickmap_object_centric():
     scene = _scene_with_bar_and_button()
     from arcengine import GameAction
     cands = candidates(scene, [GameAction.ACTION6], clickmap=True)
@@ -39,5 +39,10 @@ def test_candidates_clickmap_filters_large_objects():
     # com clickmap, objetos grandes (barra HUD) sao FILTRADOS
     assert not any("c7" in k for k in keys)  # barra (cor 7, size>100) nao aparece
     assert any("c9" in k for k in keys)      # botao (cor 9, size<=100) aparece
-    # todos os candidatos restantes tem obj_size <= 100
-    assert all(c.obj_size <= 100 for c in cands)
+    # candidatos apontam pro centroid do objeto, nao pra cell centers do grid
+    btn_cands = [c for c in cands if "c9" in c.key]
+    assert len(btn_cands) == 1
+    # centroid do botao 6x6 em g[30:36, 30:36] = (row=32.5, col=32.5) -> (x=32, y=32)
+    assert btn_cands[0].x == 32 and btn_cands[0].y == 32
+    # background fallback sempre presente
+    assert "ACTION6@bg" in keys

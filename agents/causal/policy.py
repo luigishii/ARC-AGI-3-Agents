@@ -79,17 +79,29 @@ def candidates(scene, available_actions, clickmap: bool = False) -> list:
         action = _as_action(a)
         if not action.is_complex():
             out.append(Candidate(action, None, None, action.name, False))
+        elif clickmap:
+            # Object-centric: candidate no CENTROID de cada objeto pequeno.
+            # Fix: grid 6x6 cell centers (a cada ~10px) perdem objetos pequenos
+            # que caem entre os pontos — o agente so via background.
+            seen_keys = set()
+            for o in scene.objects:
+                if o.size > 100:
+                    continue          # HUD/parede/fundo: nem gera candidato
+                x = int(round(o.centroid[1]))   # col
+                y = int(round(o.centroid[0]))   # row
+                gx, gy = cell_of(x, y)
+                key = f"ACTION6@c{o.color}s{_size_bucket(o.size)}@{gx},{gy}"
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    out.append(Candidate(action, x, y, key, True, o.size))
+            # background fallback (centro do grid)
+            out.append(Candidate(action, 32, 32, "ACTION6@bg", False, 0))
         else:
             for gy in range(GRID_N):
                 for gx in range(GRID_N):
                     x, y = cell_center(gx, gy)
                     sz = _object_size_at(scene, x, y)
-                    if clickmap:
-                        if sz > 100:
-                            continue      # HUD/parede/fundo: nem gera candidato
-                        key = click_key(scene, x, y)
-                    else:
-                        key = action_key(action, (gx, gy))
+                    key = action_key(action, (gx, gy))
                     out.append(Candidate(action, x, y, key, (gx, gy) in occ, sz))
     return out
 
