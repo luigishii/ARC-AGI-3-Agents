@@ -48,6 +48,7 @@ OFFLINE_GAMES = "sk48,vc33,ls20,tn36"   # "" = TODOS os 25; ex: "vc33,ls20" (pre
 def build_offline_notebook(sources):
     # Embarca o main.py corrigido (offline: lista jogos via Arcade local em vez de
     # HTTP). O copytree traz o main.py da competicao; nossos FILES o sobrescrevem.
+    # agents/agent.py ja vem via read_sources().
     with open(os.path.join(_repo_root(), "main.py"), "rb") as f:
         sources = {**sources, "main.py": base64.b64encode(f.read()).decode()}
     cell0 = (

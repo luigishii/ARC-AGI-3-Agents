@@ -73,6 +73,9 @@ def read_sources(root):
     for m in MODULES:
         with open(os.path.join(root, "agents", "causal", m), "rb") as f:
             out["agents/causal/" + m] = base64.b64encode(f.read()).decode()
+    # agents/agent.py (base class) tem logs melhorados — embarcar tambem
+    with open(os.path.join(root, "agents", "agent.py"), "rb") as f:
+        out["agents/agent.py"] = base64.b64encode(f.read()).decode()
     prior = os.path.join(root, "agents", "causal", "prior.json")
     if os.path.exists(prior):
         with open(prior, "rb") as f:
