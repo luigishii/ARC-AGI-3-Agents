@@ -27,7 +27,7 @@ from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
                     value_fn_from_reward, accept_reward, grounded_reward_fn,
                     grounded_multi_reward_fn, grounded_pattern_reward_fn)
 
-QUERY_COOLDOWN = 8
+QUERY_COOLDOWN = 15
 GOAL_FAIL_MAX = 3
 GOAL_AGE_MAX = 20
 TYPE_MIN_OBS = 3          # transições mínimas p/ tentar sintetizar f_τ
@@ -182,6 +182,11 @@ class CausalObjectAgent(Agent):
         self._fix_breaks = 0          # diag: vezes que o guarda quebrou uma fixação
         self._fix_on = os.environ.get("CAUSAL_FIX", "0") != "0"
         self._fix_k = int(os.environ.get("CAUSAL_FIX_K", "3"))
+        # Transfer entre níveis: cores de objeto que foram produtivas (level_up)
+        self._productive_colors = set()    # cores que estavam na key que causou level_up
+        # Deteccao de "preso": acoes consecutivas sem mudanca de estado
+        self._stale_count = 0
+        self._stale_max = int(os.environ.get("CAUSAL_STALE_MAX", "30"))
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -234,13 +239,15 @@ class CausalObjectAgent(Agent):
             if self._last_feature is not None:
                 self._prior.observe(self._last_feature, actual.kind)
             if level_up:
-                # frame-role (Tycho Gap 2): o sucessor é init-de-próximo-nível, NÃO um
-                # sucessor mecânico → registra só o desfecho (âncora de meta) e não polui
-                # os aprendizes de dinâmica com uma transição decisão→init fabricada.
-                # winframe (Tufa/duck-v26): no passo de vitoria a API empilha
-                # [tabuleiro RESOLVIDO, init do proximo nivel]; `scene` (=to_grid) ja
-                # e o proximo nivel. Ancora a meta no tabuleiro RESOLVIDO real (camada
-                # de vitoria) — a unica vez que enxergamos "como e um nivel vencido".
+                # Transfer: registra a COR do objeto da key que resolveu o nivel.
+                # No proximo nivel, objetos dessa cor ganham bonus no scoring.
+                if self._last_key and "@c" in self._last_key:
+                    try:
+                        c = int(self._last_key.split("@c")[1].split("s")[0])
+                        self._productive_colors.add(c)
+                    except (ValueError, IndexError):
+                        pass
+                self._stale_count = 0
                 win_scene = parse(win_grid(latest_frame.frame), hud_mask=self._hud.mask())
                 self._novelty.record_goal_anchor(state_signature(win_scene))
                 self._goal = None                     # nível cumprido → re-planejar
@@ -252,6 +259,11 @@ class CausalObjectAgent(Agent):
                 self._observe_types(self._prev_scene, scene, self._last_key)
                 self._track_rprog(scene)          # B′: delta de reward real por ação
                 self._track_cover()               # cobertura: conta a ação tomada
+                # Deteccao de "preso": acoes sem efeito
+                if actual.kind == "none":
+                    self._stale_count += 1
+                else:
+                    self._stale_count = 0
                 self._novelty.observe_transition(self._last_key, scene)
                 self._move.observe(self._last_key, self._prev_scene, scene)
                 cur_sig = state_signature(scene)
@@ -270,10 +282,14 @@ class CausalObjectAgent(Agent):
         cands = candidates(scene, avail, clickmap=self._clickmap)
         keymap = {c.key: c for c in cands}
         moves = self._move.moves()
-        # (1) consulta esparsa ao LLM: só se ligado, sem meta ativa e passado o cooldown
+        # (1) consulta esparsa ao LLM: só se ligado, sem meta ativa e passado o cooldown.
+        # Click-only: pula — LLM nao sabe raciocinar sobre coordenadas de pixel.
         self._since_query += 1
         self._since_direct += 1
-        if (self._llm_on and self._goal is None and self._since_query >= QUERY_COOLDOWN
+        has_keyboard = any(not (a if isinstance(a, GameAction)
+                                else GameAction.from_id(a)).is_complex() for a in avail)
+        if (self._llm_on and has_keyboard and self._goal is None
+                and self._since_query >= QUERY_COOLDOWN
                 and self._llm_calls < self._llm_max and not self._direct_on):
             self._llm_calls += 1
             dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
@@ -294,9 +310,11 @@ class CausalObjectAgent(Agent):
                 self._goal = goals[0] if goals else None
             self._goal_age = 0
             self._since_query = 0
-        # (1b) síntese esparsa de regra de tipo f_τ via LLM, validada por accept_rule
+        # (1b) síntese esparsa de regra de tipo f_τ via LLM, validada por accept_rule.
+        # Click-only: pula sintese LLM (mas _try_learn_reward ainda tenta grounded).
         self._since_type += 1
-        if (self._typed_on and self._llm_on and self._since_type >= TYPE_COOLDOWN
+        if (self._typed_on and self._llm_on and has_keyboard
+                and self._since_type >= TYPE_COOLDOWN
                 and self._llm_calls < self._llm_max):
             tau = self._pick_type_to_learn()
             if tau is not None:
@@ -304,6 +322,9 @@ class CausalObjectAgent(Agent):
             if self._should_learn_reward():
                 self._try_learn_reward(scene)      # A: sintetiza predicado de meta
             self._since_type = 0
+        # Grounded reward pra click-only: sintetiza SEM LLM (calculada por heuristica)
+        if not has_keyboard and self._grounded and self._reward_fn is None:
+            self._try_learn_reward(scene)
         cand = None
         # (-1) Sweep de tipos: garante que cada TIPO de ação (ACTION1..7) é testado
         # pelo menos 1x nos primeiros passos. Custa no máximo len(avail) ações mas
@@ -338,6 +359,18 @@ class CausalObjectAgent(Agent):
                 self._goal_fails >= GOAL_FAIL_MAX or self._goal_age >= GOAL_AGE_MAX
             ):
                 self._goal = None
+        # (2b) click-then-keyboard: se a ultima acao foi clique com efeito
+        # (selecao), tenta teclado agora (mover a peca selecionada).
+        # Cobre ka59 (select+push), ar25 (select+move), cn04, sp80, etc.
+        if (cand is None and self._last_key is not None
+                and "@c" in (self._last_key or "")
+                and self._last_effect_kind not in (None, "none")
+                and has_keyboard):
+            # Tenta cada direcao pra ver se move a peca selecionada
+            for k in ("ACTION1", "ACTION2", "ACTION3", "ACTION4"):
+                if k in keymap and self._cover.get(k, 0) < 3:
+                    cand = keymap[k]
+                    break
         # (3) fallback determinístico: navigate → plan → greedy
         if cand is None and self._nav_on:
             nk = navigate(scene, self._move)
@@ -385,8 +418,15 @@ class CausalObjectAgent(Agent):
                 self._seen_effects, budget_frac, novelty=self._novelty, prior=self._prior,
                 clickmap=self._clickmap,
                 rprog=self._rprog if self._rprog_on else None,
+                productive_colors=self._productive_colors or None,
             )
         if cand is None:
+            self._pending_log = None
+            return GameAction.RESET
+        # Reset voluntário: se preso (N ações sem efeito), reseta o nível
+        # em vez de desperdiçar o budget restante. Limpa stale e tenta de novo.
+        if self._stale_count >= self._stale_max:
+            self._stale_count = 0
             self._pending_log = None
             return GameAction.RESET
         cand = self._antifix(cand, cands, keymap)   # guarda global anti-fixação

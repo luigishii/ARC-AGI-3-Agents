@@ -111,7 +111,8 @@ class Policy:
         self._rng = random.Random(seed)
         self.epsilon = epsilon
 
-    def score(self, cand, model, seen_effects, budget_frac, novelty=None, prior=None, rprog=None) -> float:
+    def score(self, cand, model, seen_effects, budget_frac, novelty=None, prior=None,
+              rprog=None, productive_colors=None) -> float:
         eff, conf = model.predict(cand.key)
         s = 0.0
         if model.is_progress(cand.key):
@@ -144,10 +145,19 @@ class Policy:
                 avg = sum(row) / len(row)
                 if avg > 0:
                     s += min(2.0, 5.0 * avg)
+        # Transfer entre níveis: cores que resolveram níveis anteriores ganham bonus.
+        if productive_colors and "@c" in cand.key:
+            try:
+                c = int(cand.key.split("@c")[1].split("s")[0])
+                if c in productive_colors:
+                    s += 2.0
+            except (ValueError, IndexError):
+                pass
         return s
 
     def decide(self, scene, model, available_actions, seen_effects, budget_frac,
-               novelty=None, prior=None, clickmap=False, rprog=None):
+               novelty=None, prior=None, clickmap=False, rprog=None,
+               productive_colors=None):
         cands = candidates(scene, available_actions, clickmap=clickmap)
         if not cands:
             return None
@@ -155,7 +165,8 @@ class Policy:
             return self._rng.choice(cands)
         best, best_s = None, None
         for c in cands:
-            sc = self.score(c, model, seen_effects, budget_frac, novelty=novelty, prior=prior, rprog=rprog)
+            sc = self.score(c, model, seen_effects, budget_frac, novelty=novelty,
+                            prior=prior, rprog=rprog, productive_colors=productive_colors)
             if best_s is None or sc > best_s:
                 best, best_s = c, sc
         return best
