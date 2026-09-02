@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 
 from agents.causal.agent import CausalObjectAgent
@@ -29,7 +31,7 @@ def test_track_rprog_positive_delta(monkeypatch):
     a._prev_scene = _scene(3)          # antes: 3 objetos → value 80
     a._last_key = "ACTION6"
     a._track_rprog(_scene(1))          # depois: 1 objeto → value 100 → Δ=+20
-    assert a._rprog["ACTION6"][1] == 1
+    assert len(a._rprog["ACTION6"]) == 1
     assert a._rprog["ACTION6"][0] == 20.0
 
 
@@ -68,10 +70,10 @@ def test_track_rprog_discards_non_finite(monkeypatch):
 # --- phase2_stats expõe rprog_actions e rprog_fires ---
 def test_phase2_stats_rprog_keys(monkeypatch):
     a = _agent(monkeypatch)
-    a._rprog = {"ACTION6": [30.0, 3], "ACTION1": [-5.0, 2]}
+    a._rprog = {"ACTION6": deque([10.0, 10.0, 10.0]), "ACTION1": deque([-2.5, -2.5])}
     a._rprog_fires = 7
     s = a.phase2_stats()
-    assert s["rprog_actions"] == 1     # só ACTION6 tem média > 0
+    assert s["rprog_actions"] == 1     # só ACTION6 tem >=3 obs e média > 0
     assert s["rprog_fires"] == 7
 
 
@@ -85,7 +87,7 @@ def _cands(*keys):
 # --- escolhe a key de maior Δ médio positivo e incrementa rprog_fires ---
 def test_rprog_decide_picks_best_positive(monkeypatch):
     a = _agent(monkeypatch, CAUSAL_RPROG="1")
-    a._rprog = {"ACTION6": [30.0, 3], "ACTION1": [4.0, 2]}   # médias 10 vs 2
+    a._rprog = {"ACTION6": deque([10.0, 10.0, 10.0]), "ACTION1": deque([2.0, 2.0, 2.0])}
     out = a._rprog_decide(_cands("ACTION1", "ACTION6"))
     assert out == "ACTION6"
     assert a._rprog_fires == 1
@@ -94,7 +96,7 @@ def test_rprog_decide_picks_best_positive(monkeypatch):
 # --- nenhuma média positiva → None, rprog_fires inalterado ---
 def test_rprog_decide_none_when_no_positive(monkeypatch):
     a = _agent(monkeypatch, CAUSAL_RPROG="1")
-    a._rprog = {"ACTION1": [-6.0, 2]}
+    a._rprog = {"ACTION1": deque([-3.0, -3.0, -3.0])}
     out = a._rprog_decide(_cands("ACTION1"))
     assert out is None
     assert a._rprog_fires == 0

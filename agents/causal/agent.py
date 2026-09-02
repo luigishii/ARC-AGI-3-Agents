@@ -170,9 +170,10 @@ class CausalObjectAgent(Agent):
         self._iw_goal_hits = 0        # diag: IW achou caminho até a meta
         self._reward_real_true = 0    # diag: reward_fn deu goal_flag=True em cena real
         self._reward_real_evals = 0   # diag: cenas reais avaliadas pela reward_fn
-        self._rprog = {}              # action_key -> [soma_Δ, contagem] (progresso model-free)
+        self._rprog = {}              # action_key -> deque[float] (deltas recentes de reward)
         self._rprog_fires = 0         # diag: vezes que a camada rprog escolheu a ação
         self._rprog_on = os.environ.get("CAUSAL_RPROG", "0") != "0"
+        self._rprog_max = int(os.environ.get("CAUSAL_RPROG_MAX", "20"))
         self._cover = {}              # action_key -> nº de vezes tomada (exploração por cobertura)
         self._cover_on = os.environ.get("CAUSAL_COVER", "0") != "0"
         self._clickmap = os.environ.get("CAUSAL_CLICKMAP", "0") != "0"
@@ -355,6 +356,8 @@ class CausalObjectAgent(Agent):
             cand = self._policy.decide(
                 scene, self._model, avail,
                 self._seen_effects, budget_frac, novelty=self._novelty, prior=self._prior,
+                clickmap=self._clickmap,
+                rprog=self._rprog if self._rprog_on else None,
             )
         if cand is None:
             self._pending_log = None
@@ -461,8 +464,9 @@ class CausalObjectAgent(Agent):
             self._reward_real_true += 1
 
     def _track_rprog(self, scene):
-        """B′: acumula Δ do reward REAL (depois-antes) por action_key. Model-free —
-        contorna o f_τ que não simula a variável do reward. Só decisão→decisão."""
+        """B′: acumula Δ do reward REAL (depois-antes) por action_key numa janela
+        deslizante (deque maxlen=10). Evita fixação por sinal antigo positivo que
+        já saturou. Model-free. Só decisão→decisão."""
         if self._reward_fn is None or self._last_key is None or self._prev_scene is None:
             return
         vf = value_fn_from_reward(self._reward_fn)
@@ -471,18 +475,21 @@ class CausalObjectAgent(Agent):
         vb, va = vf(before), vf(after)
         if not (math.isfinite(vb) and math.isfinite(va)):
             return
-        row = self._rprog.setdefault(self._last_key, [0.0, 0])
-        row[0] += va - vb
-        row[1] += 1
+        row = self._rprog.setdefault(self._last_key, deque(maxlen=10))
+        row.append(va - vb)
 
     def _rprog_decide(self, cands):
-        """B′: escolhe a ação de maior Δ médio de reward real (>0). Sem dados/positivo → None."""
+        """B′: escolhe a ação de maior Δ médio de reward real (>0). Min 3 observações
+        por key, cap de _rprog_max fires por episódio (evita monopolizar). Sem
+        dados/positivo/cap estourado → None."""
+        if self._rprog_fires >= self._rprog_max:
+            return None
         best_key, best_avg = None, 0.0
         for c in cands:
             row = self._rprog.get(c.key)
-            if not row or row[1] == 0:
+            if not row or len(row) < 3:
                 continue
-            avg = row[0] / row[1]
+            avg = sum(row) / len(row)
             if avg > best_avg:
                 best_avg, best_key = avg, c.key
         if best_key is not None:
@@ -496,11 +503,13 @@ class CausalObjectAgent(Agent):
 
     def _cover_decide(self, cands):
         """Exploração por cobertura: escolhe a candidata MENOS visitada. Desempate:
-        has_object antes de vazio; evita repetir a última ação; senão ordem de cands."""
+        has_object antes de vazio; prefere objetos pequenos (interativos); evita
+        repetir a última ação; senão ordem de cands."""
         def rank(c):
             return (self._cover.get(c.key, 0),
                     0 if c.has_object else 1,
-                    1 if c.key == self._last_key else 0)
+                    1 if c.key == self._last_key else 0,
+                    c.obj_size)
         return min(cands, key=rank).key
 
     def _antifix(self, cand, cands, keymap):
@@ -717,7 +726,7 @@ class CausalObjectAgent(Agent):
             "iw_goal_hits": self._iw_goal_hits,
             "reward_real_true": self._reward_real_true,
             "reward_real_evals": self._reward_real_evals,
-            "rprog_actions": sum(1 for r in self._rprog.values() if r[1] and r[0] / r[1] > 0),
+            "rprog_actions": sum(1 for r in self._rprog.values() if len(r) >= 3 and sum(r) / len(r) > 0),
             "rprog_fires": self._rprog_fires,
             "direct_calls": self._direct_calls,
             "direct_hits": self._direct_hits,

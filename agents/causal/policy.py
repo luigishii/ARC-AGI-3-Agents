@@ -6,7 +6,7 @@ from collections import namedtuple
 
 from arcengine import GameAction
 
-Candidate = namedtuple("Candidate", "action x y key has_object")
+Candidate = namedtuple("Candidate", "action x y key has_object obj_size", defaults=(0,))
 
 GRID_N = 6
 
@@ -55,6 +55,14 @@ def click_key(scene, x: int, y: int) -> str:
     return "ACTION6@bg"
 
 
+def _object_size_at(scene, x: int, y: int) -> int:
+    """Tamanho do objeto sob (x=col, y=row). 0 se fundo/vazio."""
+    for o in scene.objects:
+        if (y, x) in o.cells:
+            return o.size
+    return 0
+
+
 def _object_cells(scene) -> set:
     occ = set()
     for o in scene.objects:
@@ -77,7 +85,8 @@ def candidates(scene, available_actions, clickmap: bool = False) -> list:
                     # clickmap: chave por (cor,tamanho) do objeto sob o cursor
                     # (produtividade por classe visual); senao chave por celula 6x6.
                     key = click_key(scene, x, y) if clickmap else action_key(action, (gx, gy))
-                    out.append(Candidate(action, x, y, key, (gx, gy) in occ))
+                    sz = _object_size_at(scene, x, y)
+                    out.append(Candidate(action, x, y, key, (gx, gy) in occ, sz))
     return out
 
 
@@ -86,7 +95,7 @@ class Policy:
         self._rng = random.Random(seed)
         self.epsilon = epsilon
 
-    def score(self, cand, model, seen_effects, budget_frac, novelty=None, prior=None) -> float:
+    def score(self, cand, model, seen_effects, budget_frac, novelty=None, prior=None, rprog=None) -> float:
         eff, conf = model.predict(cand.key)
         s = 0.0
         if model.is_progress(cand.key):
@@ -106,20 +115,31 @@ class Policy:
             s -= 2.0
         if cand.has_object:
             s += 0.5
+            # Objetos grandes sao quase sempre inertes (HUD, parede, fundo).
+            if cand.obj_size > 100:
+                s -= 4.0
         if prior is not None:
             from .transfer import abstract_feature, W_PRIOR
             s += W_PRIOR * prior.productivity(abstract_feature(cand))
+        # Bonus por progresso de reward observado (model-free, rprog integrado)
+        if rprog is not None:
+            row = rprog.get(cand.key)
+            if row and len(row) >= 3:
+                avg = sum(row) / len(row)
+                if avg > 0:
+                    s += min(2.0, 5.0 * avg)
         return s
 
-    def decide(self, scene, model, available_actions, seen_effects, budget_frac, novelty=None, prior=None):
-        cands = candidates(scene, available_actions)
+    def decide(self, scene, model, available_actions, seen_effects, budget_frac,
+               novelty=None, prior=None, clickmap=False, rprog=None):
+        cands = candidates(scene, available_actions, clickmap=clickmap)
         if not cands:
             return None
         if self._rng.random() < self.epsilon:
             return self._rng.choice(cands)
         best, best_s = None, None
         for c in cands:
-            sc = self.score(c, model, seen_effects, budget_frac, novelty=novelty, prior=prior)
+            sc = self.score(c, model, seen_effects, budget_frac, novelty=novelty, prior=prior, rprog=rprog)
             if best_s is None or sc > best_s:
                 best, best_s = c, sc
         return best
