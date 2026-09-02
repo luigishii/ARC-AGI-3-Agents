@@ -305,8 +305,20 @@ class CausalObjectAgent(Agent):
                 self._try_learn_reward(scene)      # A: sintetiza predicado de meta
             self._since_type = 0
         cand = None
+        # (-1) Sweep de tipos: garante que cada TIPO de ação (ACTION1..7) é testado
+        # pelo menos 1x nos primeiros passos. Custa no máximo len(avail) ações mas
+        # descobre todas as mecânicas (teclado, validar, undo). Sem isso o agente
+        # colapsa em ACTION6 e nunca descobre que ACTION5=validar ou ACTION7=undo.
+        if self.action_counter < len(avail) * 2:
+            for a in avail:
+                act = a if isinstance(a, GameAction) else GameAction.from_id(a)
+                k = act.name
+                if k not in self._cover:
+                    cand = keymap.get(k)
+                    if cand is not None:
+                        break
         # (0) Score-max Lever #2: raciocinio direto passo-a-passo (topo da pilha)
-        if self._direct_on:
+        if cand is None and self._direct_on:
             cand = self._direct_decide(scene, avail, keymap, moves)
         # (2) meta do LLM com validação
         if cand is None and self._goal is not None:
@@ -335,6 +347,21 @@ class CausalObjectAgent(Agent):
             rk = self._rprog_decide(cands)    # B′: progresso model-free por reward real
             if rk is not None:
                 cand = keymap.get(rk)
+        # ACTION7 reativo: undo quando a ultima acao piorou o reward (delta < 0).
+        # Cobre ar25, lf52, sb26, sk48, su15 — jogos com undo estrategico.
+        if (cand is None and self._last_key is not None
+                and "ACTION7" in keymap and self._last_effect_kind not in (None, "none")):
+            row = self._rprog.get(self._last_key)
+            if row and len(row) >= 1 and row[-1] < -0.5:
+                cand = keymap["ACTION7"]
+        # ACTION5 periodico: validar/grab/ciclar/disparar. Muitos jogos exigem
+        # ACTION5 apos montar o estado (sb26=run, wa30=grab, cd82=fire, sp80=flow).
+        # Tenta a cada 15 acoes se houve mudanca de estado (efeito != none recente).
+        if (cand is None and "ACTION5" in keymap
+                and self.action_counter >= 8
+                and self.action_counter % 15 < 2
+                and any(e != "none" for e in list(self._seen_effects)[:5])):
+            cand = keymap["ACTION5"]
         if cand is None and self._iw_on and cands:
             ik = self._iw_decide(scene, cands)     # IW sobre o TypedWorldModel (f_τ)
             if ik is not None:
@@ -508,11 +535,17 @@ class CausalObjectAgent(Agent):
             self._cover[self._last_key] = self._cover.get(self._last_key, 0) + 1
 
     def _cover_decide(self, cands):
-        """Exploração por cobertura: escolhe a candidata MENOS visitada. Desempate:
-        has_object antes de vazio; prefere objetos pequenos (interativos); evita
-        repetir a última ação; senão ordem de cands."""
+        """Exploração por cobertura: escolhe a candidata MENOS visitada. Prioriza
+        TIPOS de ação não-testados (keyboard/ACTION5/7 > click repetido),
+        has_object antes de vazio, objetos pequenos, evita repetir a última ação."""
         def rank(c):
-            return (self._cover.get(c.key, 0),
+            visits = self._cover.get(c.key, 0)
+            # Tipos de ação não-testados (ACTION1-5,7) tem prioridade sobre
+            # variantes de clique já vistas — garante que teclado/validar/undo
+            # são descobertos cedo em jogos mistos.
+            is_keyboard = c.x is None   # keyboard actions tem x=None
+            type_prio = 0 if (is_keyboard and visits == 0) else 1
+            return (visits, type_prio,
                     0 if c.has_object else 1,
                     1 if c.key == self._last_key else 0,
                     c.obj_size)
