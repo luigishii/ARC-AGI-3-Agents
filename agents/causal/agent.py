@@ -387,25 +387,32 @@ class CausalObjectAgent(Agent):
                     cand = keymap.get(k)
                     if cand is not None:
                         break
-        # (2b) two-phase: se a ultima acao foi clique com efeito (selecao/toggle),
-        # tenta a proxima fase — teclado (ka59, ar25, cn04, sp80) OU outro clique
-        # num objeto diferente (r11l: click peca → click destino; lf52: peca→marker).
+        # (2b) two-phase: se a ultima acao teve efeito, tenta a proxima fase.
+        # Click→teclado (ka59, ar25, cn04, sp80), click→click (r11l, lf52),
+        # OU teclado→teclado diferente (su15: grab→move→drop).
         if (cand is None and self._last_key is not None
-                and "@c" in (self._last_key or "")
                 and self._last_effect_kind not in (None, "none")):
-            if has_keyboard:
-                # Fase 2 = teclado: tenta cada direcao
+            was_click = "@c" in (self._last_key or "")
+            was_keyboard = not was_click and "@" not in (self._last_key or "")
+            if was_click and has_keyboard:
+                # Click→teclado: tenta cada direcao
                 for k in ("ACTION1", "ACTION2", "ACTION3", "ACTION4"):
                     if k in keymap and self._cover.get(k, 0) < 3:
                         cand = keymap[k]
                         break
-            if cand is None:
-                # Fase 2 = outro clique: escolhe objeto de cor/posicao diferente
+            if was_click and cand is None:
+                # Click→click diferente: outro objeto
                 alt = [c for c in cands if c.key != self._last_key
                        and c.has_object and c.key != "ACTION6@bg"]
                 if alt:
                     best = min(alt, key=lambda c: self._cover.get(c.key, 0))
                     cand = best
+            if was_keyboard and cand is None:
+                # Teclado→teclado diferente (su15: grab→move, sp80: flow→flow)
+                for k in ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5"):
+                    if k in keymap and k != self._last_key and self._cover.get(k, 0) < 3:
+                        cand = keymap[k]
+                        break
         # (3) navigate: avatar→alvo via MovementModel (heuristico, multi-target)
         if cand is None and self._nav_on:
             nk = navigate(scene, self._move, reached_ids=self._reached_ids)
@@ -493,12 +500,12 @@ class CausalObjectAgent(Agent):
                 clickmap=self._clickmap,
                 rprog=self._rprog if self._rprog_on else None,
                 productive_colors=self._productive_colors or None,
+                last_key=self._last_key,
             )
         if cand is None:
             self._pending_log = None
             return GameAction.RESET
         # Reset voluntário: se preso (N ações sem efeito), reseta o nível.
-        # Click-only: stale mais agressivo (12) — cliques sem efeito = layout ruim,
         # reset rapido tenta outro layout. Keyboard: proporcional aos candidatos.
         if not has_keyboard:
             adaptive_stale = 12
@@ -508,6 +515,23 @@ class CausalObjectAgent(Agent):
             self._stale_count = 0
             self._pending_log = None
             return GameAction.RESET
+        # Budget-aware reset: se gastou 80%+ do budget sem progresso recente,
+        # reseta pra tentar de novo com o que aprendeu (navigate, productive_colors).
+        if (budget_frac < 0.2 and self._stale_count >= 3
+                and self.action_counter >= 30):
+            self._stale_count = 0
+            self._pending_log = None
+            return GameAction.RESET
+        # Reset por reward negativo sustentado: ultimas acoes so pioraram →
+        # layout ruim, reset rapido em vez de esperar stale_count.
+        if self._rprog and self._reward_fn is not None:
+            recent = []
+            for row in self._rprog.values():
+                recent.extend(list(row)[-3:])
+            if len(recent) >= 5 and all(d < -0.1 for d in recent[-5:]):
+                self._stale_count = 0
+                self._pending_log = None
+                return GameAction.RESET
         cand = self._antifix(cand, cands, keymap)   # guarda global anti-fixação
         action = cand.action
         if action.is_complex():

@@ -157,7 +157,7 @@ class Policy:
 
     def decide(self, scene, model, available_actions, seen_effects, budget_frac,
                novelty=None, prior=None, clickmap=False, rprog=None,
-               productive_colors=None):
+               productive_colors=None, last_key=None):
         cands = candidates(scene, available_actions, clickmap=clickmap)
         if not cands:
             return None
@@ -169,6 +169,9 @@ class Policy:
         for c in cands:
             sc = self.score(c, model, seen_effects, budget_frac, novelty=novelty,
                             prior=prior, rprog=rprog, productive_colors=productive_colors)
+            # Click diversity: penaliza repetir a mesma acao da rodada anterior
+            if last_key and c.key == last_key:
+                sc -= 3.0
             if best_s is None or sc > best_s:
                 best, best_s = c, sc
         return best

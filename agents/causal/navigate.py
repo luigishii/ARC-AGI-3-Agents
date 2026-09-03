@@ -26,15 +26,21 @@ class MovementModel:
     def __init__(self):
         self.vec = {}            # action_key -> {(dr,dc) -> count}
         self.avatar_counts = {}  # obj_id -> count
+        self.blocked = {}        # action_key -> count de vezes que NAO moveu o avatar
 
     def observe(self, key, prev, curr) -> None:
         m = _moved_object(prev, curr)
         if m is None:
+            # Se a key ja tinha vetor aprendido mas nao moveu → parede/bloqueio
+            if key in self.vec and "@" not in key:
+                self.blocked[key] = self.blocked.get(key, 0) + 1
             return
         oid, v = m
         self.vec.setdefault(key, {})
         self.vec[key][v] = self.vec[key].get(v, 0) + 1
         self.avatar_counts[oid] = self.avatar_counts.get(oid, 0) + 1
+        # Movimento bem-sucedido: reseta contador de bloqueio
+        self.blocked.pop(key, None)
 
     def move_vector(self, key):
         d = self.vec.get(key)
@@ -102,8 +108,19 @@ def navigate(scene, move, reached_ids=None):
         ty, tx = target.centroid
         cur_dist = abs(ty - ay) + abs(tx - ax)
     best, bd = None, cur_dist
+    blocked = getattr(move, "blocked", {})
     for k, (dr, dc) in moves.items():
+        # Pula direcoes bloqueadas (bateu na parede 2+ vezes recentes)
+        if blocked.get(k, 0) >= 2:
+            continue
         nd = abs(ty - (ay + dr)) + abs(tx - (ax + dc))
         if nd < bd:
             bd, best = nd, k
+    # Se todas as direcoes boas estao bloqueadas, tenta qualquer uma (desbloqueio)
+    if best is None:
+        for k, (dr, dc) in moves.items():
+            nd = abs(ty - (ay + dr)) + abs(tx - (ax + dc))
+            if nd < cur_dist:
+                bd, best = nd, k
+                break
     return best
