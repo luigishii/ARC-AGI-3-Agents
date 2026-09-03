@@ -26,7 +26,7 @@ from .iw import iw_plan
 from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
                     value_fn_from_reward, accept_reward, grounded_reward_fn,
                     grounded_multi_reward_fn, grounded_pattern_reward_fn,
-                    grounded_pair_reward_fn)
+                    grounded_pair_reward_fn, grounded_template_reward_fn)
 
 QUERY_COOLDOWN = 15
 GOAL_FAIL_MAX = 3
@@ -204,6 +204,14 @@ class CausalObjectAgent(Agent):
         # Click replay: ultimas N keys que produziram efeito visivel (nao "none").
         # No proximo nivel, tenta estas keys primeiro (mesmas cores/posicoes tendem a funcionar).
         self._effective_keys = deque(maxlen=10)   # keys que tiveram efeito recente
+        # Level solution replay: sequencia de acoes do nivel atual + solucao do anterior
+        self._level_seq = []            # acoes tomadas neste nivel (key list)
+        self._win_seq = []              # sequencia que resolveu o ultimo nivel
+        self._replay_idx = 0            # posicao no replay da win_seq
+        # Win grid template: pixel grid do estado vencedor do ultimo nivel
+        self._win_template = None       # np.ndarray ou None
+        # Grid pixel diff: mudanca de pixels por acao
+        self._last_pixel_delta = 0      # pixels que mudaram na ultima acao
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -241,6 +249,8 @@ class CausalObjectAgent(Agent):
             self._burst_count = 0
             self._burst_distinct.clear()
             self._reached_ids.clear()
+            self._level_seq.clear()
+            self._replay_idx = 0
             # Limpa dados espaciais stale (layout muda entre tentativas).
             # productive_colors persiste (cross-nivel).
             self._rprog.clear()
@@ -254,6 +264,13 @@ class CausalObjectAgent(Agent):
         grid = to_grid(latest_frame.frame)
         if self._prev_grid is not None:
             self._hud.update(self._prev_grid, grid)
+            # Grid pixel diff: quantos pixels mudaram (sinal mais rico que object-based)
+            try:
+                self._last_pixel_delta = int((grid != self._prev_grid).sum())
+            except Exception:
+                self._last_pixel_delta = 0
+        else:
+            self._last_pixel_delta = 0
         scene = match_objects(self._prev_scene, parse(latest_frame.frame, hud_mask=self._hud.mask()))
         self._percept.observe(len(scene.objects))   # §2: instabilidade → fallback grid (Tycho)
         self._eval_reward_real(scene)               # diag: reward_fn na cena real
@@ -275,9 +292,17 @@ class CausalObjectAgent(Agent):
                         self._productive_colors.add(c)
                     except (ValueError, IndexError):
                         pass
+                # Solution replay: salva sequencia que resolveu este nivel
+                self._level_seq.append(self._last_key)
+                self._win_seq = list(self._level_seq)
+                self._level_seq.clear()
+                self._replay_idx = 0
+                # Win template: salva grid do estado vencedor pra pattern matching
+                wg = win_grid(latest_frame.frame)
+                self._win_template = wg if wg is not None else None
                 self._stale_count = 0
                 # Limpa dados espaciais do nivel anterior (layout muda entre niveis).
-                # productive_colors, _model e _move persistem (transferem entre niveis).
+                # productive_colors, _model, _move, _win_seq persistem (transferem).
                 self._rprog.clear()
                 self._rprog_fires = 0
                 self._cover.clear()
@@ -287,19 +312,23 @@ class CausalObjectAgent(Agent):
                 self._reward_src = None
                 self._reward_defer = 0
                 self._reached_ids.clear()   # novo nivel → alvos resetam
-                win_scene = parse(win_grid(latest_frame.frame), hud_mask=self._hud.mask())
+                win_scene = parse(wg, hud_mask=self._hud.mask())
                 self._novelty.record_goal_anchor(state_signature(win_scene))
                 self._goal = None                     # nível cumprido → re-planejar
                 self._last_effect_kind = None
             else:
+                # Registra acao na sequencia do nivel atual (pra replay)
+                self._level_seq.append(self._last_key)
                 # transição DECISÃO→DECISÃO: alimenta retrodição + f_τ/η + movimento + forward
                 self._buffer.append((self._prev_scene, self._last_key, actual.kind))
                 self._last_effect_kind = actual.kind
                 self._observe_types(self._prev_scene, scene, self._last_key)
                 self._track_rprog(scene)          # B′: delta de reward real por ação
                 self._track_cover()               # cobertura: conta a ação tomada
-                # Deteccao de "preso": acoes sem efeito
-                if actual.kind == "none":
+                # Deteccao de "preso": acoes sem efeito.
+                # Grid pixel diff: se pixels mudaram, nao e stale mesmo que object
+                # model diga "none" (percepcao pode ter perdido a mudanca).
+                if actual.kind == "none" and self._last_pixel_delta < 5:
                     self._stale_count += 1
                     self._burst_count = 0
                     self._burst_distinct.clear()
@@ -387,6 +416,16 @@ class CausalObjectAgent(Agent):
                     cand = keymap.get(k)
                     if cand is not None:
                         break
+        # (-0.5) Solution replay: se resolveu o nivel anterior, tenta replay-ar a
+        # mesma sequencia no nivel seguinte. Muitos jogos ARC tem solucao similar.
+        if cand is None and self._win_seq and self._replay_idx < len(self._win_seq):
+            rkey = self._win_seq[self._replay_idx]
+            if rkey in keymap:
+                cand = keymap[rkey]
+                self._replay_idx += 1
+            else:
+                # Key do replay nao existe neste nivel → aborta replay
+                self._replay_idx = len(self._win_seq)
         # (2b) two-phase: se a ultima acao teve efeito, tenta a proxima fase.
         # Click→teclado (ka59, ar25, cn04, sp80), click→click (r11l, lf52),
         # OU teclado→teclado diferente (su15: grab→move→drop).
@@ -855,6 +894,11 @@ class CausalObjectAgent(Agent):
         # um alvo (raro/compacto) sao conhecidos, usa -manhattan(avatar,alvo) por cor.
         # A vitoria no AGI-3 e sempre espacial (docs/GAMES.md), nunca contagem-de-cor.
         if self._grounded:
+            # Template reward (mais precisa): usa o grid vencedor do nivel anterior
+            if self._win_template is not None:
+                self._reward_fn = grounded_template_reward_fn(self._win_template)
+                self._reward_src = "grounded:template(win-grid)"
+                return True
             aid = self._move.avatar_id()
             objs = list(scene.objects)
             avatar_idx = next((i for i, o in enumerate(objs[:8]) if o.id == aid), None)

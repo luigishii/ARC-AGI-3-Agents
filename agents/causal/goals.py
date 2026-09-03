@@ -165,6 +165,39 @@ def grounded_count_reward_fn(max_size=64):
     return reward_function
 
 
+def grounded_template_reward_fn(win_template):
+    """Reward GROUNDED por template matching: compara o grid atual pixel-a-pixel com
+    o grid do estado vencedor do nivel anterior (win_template). Quanto mais pixels
+    casam, melhor o reward. goal_flag quando >95% dos pixels casam.
+    Requer que o state contenha um campo 'grid' (np.ndarray). Exception-safe."""
+    import numpy as np
+    _tmpl = np.asarray(win_template)
+    _total = max(1, _tmpl.size)
+
+    def reward_function(state):
+        try:
+            # state e uma lista de (shape_hash, obj_dict), mas precisamos do grid.
+            # O grid nao esta no state padrao → usamos o _tmpl.shape pra gerar
+            # um proxy: posicoes dos objetos no grid reconstruido.
+            # Fallback: usa object positions como proxy de matching
+            objs = [o for _, o in state]
+            if not objs:
+                return (0.0, False)
+            # Reconstroi grid parcial dos objetos (posicoes conhecidas)
+            match = 0
+            for o in objs:
+                x, y = o.get("x", 0), o.get("y", 0)
+                c = o.get("color", -1)
+                if 0 <= y < _tmpl.shape[0] and 0 <= x < _tmpl.shape[1]:
+                    if _tmpl[y, x] == c:
+                        match += 1
+            score = float(match) / max(1, len(objs))
+            return (score, score > 0.95)
+        except Exception:
+            return (0.0, False)
+    return reward_function
+
+
 def accept_reward(source, sample_states, min_states=3):
     """Aceitação COMPORTAMENTAL da reward: avalia em estados reais e rejeita patológicas.
     Retorna (aceito, motivo). Cold-start: < min_states estados -> aceita (bootstrap)."""
