@@ -191,6 +191,10 @@ class CausalObjectAgent(Agent):
         self._combo_buf = deque(maxlen=5)    # ultimas 5 keys
         self._combos = {}                     # (key1,key2) -> [delta_sum, count]
         self._combo_on = os.environ.get("CAUSAL_COMBO", "1") != "0"
+        # LLM defer: roda N acoes heuristicas antes de permitir chamadas LLM.
+        # Garante que TODOS os jogos iniciam rapidos (~20fps) e so usam LLM quando
+        # as heuristicas (navigate, cover, grounded) ja tiveram chance de agir.
+        self._llm_defer = int(os.environ.get("CAUSAL_LLM_DEFER", "50"))
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -312,7 +316,8 @@ class CausalObjectAgent(Agent):
                                 else GameAction.from_id(a)).is_complex() for a in avail)
         if (self._llm_on and has_keyboard and self._goal is None
                 and self._since_query >= QUERY_COOLDOWN
-                and self._llm_calls < self._llm_max and not self._direct_on):
+                and self._llm_calls < self._llm_max and not self._direct_on
+                and self.action_counter >= self._llm_defer):
             self._llm_calls += 1
             dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
             prompt = build_prompt(scene, dyn)
@@ -337,15 +342,17 @@ class CausalObjectAgent(Agent):
         self._since_type += 1
         if (self._typed_on and self._llm_on and has_keyboard
                 and self._since_type >= TYPE_COOLDOWN
-                and self._llm_calls < self._llm_max):
+                and self._llm_calls < self._llm_max
+                and self.action_counter >= self._llm_defer):
             tau = self._pick_type_to_learn()
             if tau is not None:
                 self._try_learn_type_rule(tau)
             if self._should_learn_reward():
                 self._try_learn_reward(scene)      # A: sintetiza predicado de meta
             self._since_type = 0
-        # Grounded reward pra click-only: sintetiza SEM LLM (calculada por heuristica)
-        if not has_keyboard and self._grounded and self._reward_fn is None:
+        # Grounded reward pra TODOS os jogos: sintetiza SEM LLM (calculada por heuristica).
+        # Jogos de teclado tambem ganham reward grounded (manhattan, multi-align, pattern).
+        if self._grounded and self._reward_fn is None:
             self._try_learn_reward(scene)
         cand = None
         # (-1) Sweep de tipos: garante que cada TIPO de ação (ACTION1..7) é testado
@@ -360,27 +367,6 @@ class CausalObjectAgent(Agent):
                     cand = keymap.get(k)
                     if cand is not None:
                         break
-        # (0) Score-max Lever #2: raciocinio direto passo-a-passo (topo da pilha)
-        if cand is None and self._direct_on:
-            cand = self._direct_decide(scene, avail, keymap, moves)
-        # (2) meta do LLM com validação
-        if cand is None and self._goal is not None:
-            self._goal_age += 1
-            gkey = execute_goal(self._goal, scene, moves)
-            if gkey is not None and gkey in keymap:
-                cand = keymap[gkey]
-                self._goal_fails = 0
-                # 'press' e tecla unica: executa 1x e limpa -> os proximos passos caem
-                # na pilha de exploracao em vez de repetir a mesma tecla ate GOAL_AGE_MAX
-                # (era a causa da fixacao em ACTION2). Metas 'code'/'reach' persistem.
-                if self._goal.get("type") == "press":
-                    self._goal = None
-            else:
-                self._goal_fails += 1
-            if self._goal is not None and (
-                self._goal_fails >= GOAL_FAIL_MAX or self._goal_age >= GOAL_AGE_MAX
-            ):
-                self._goal = None
         # (2b) two-phase: se a ultima acao foi clique com efeito (selecao/toggle),
         # tenta a proxima fase — teclado (ka59, ar25, cn04, sp80) OU outro clique
         # num objeto diferente (r11l: click peca → click destino; lf52: peca→marker).
@@ -438,6 +424,23 @@ class CausalObjectAgent(Agent):
             ik = self._iw_decide(scene, cands)     # IW sobre o TypedWorldModel (f_τ)
             if ik is not None:
                 cand = keymap.get(ik)
+        # --- LLM strategies (so apos _llm_defer acoes heuristicas) ---
+        if cand is None and self._direct_on:
+            cand = self._direct_decide(scene, avail, keymap, moves)
+        if cand is None and self._goal is not None:
+            self._goal_age += 1
+            gkey = execute_goal(self._goal, scene, moves)
+            if gkey is not None and gkey in keymap:
+                cand = keymap[gkey]
+                self._goal_fails = 0
+                if self._goal.get("type") == "press":
+                    self._goal = None
+            else:
+                self._goal_fails += 1
+            if self._goal is not None and (
+                self._goal_fails >= GOAL_FAIL_MAX or self._goal_age >= GOAL_AGE_MAX
+            ):
+                self._goal = None
         if cand is None and self._plan_on and cands:
             planned = plan(state_signature(scene), [c.key for c in cands],
                            self._tmodel, self._novelty, self._novelty.goal_anchors)
@@ -544,6 +547,8 @@ class CausalObjectAgent(Agent):
         if self._since_direct < self._direct_cooldown:
             return None
         if self._llm_calls >= self._llm_max:
+            return None
+        if self.action_counter < self._llm_defer:
             return None
         # Click-only: LLM nao sabe raciocinar sobre "clique no pixel X,Y"
         # — so gasta ~60s por chamada com 0 hits. Pula e deixa o policy decidir.
@@ -808,7 +813,9 @@ class CausalObjectAgent(Agent):
                 self._reward_fn = grounded_pattern_reward_fn()
                 self._reward_src = "grounded:pattern(topo-vs-baixo)"
                 return True
-            # grounded on mas sem estrutura util -> cai no LLM (fallback)
+            # grounded on mas sem estrutura util -> so cai no LLM apos o deferimento
+            if self.action_counter < self._llm_defer or self._llm_calls >= self._llm_max:
+                return False
         states = [[(o.shape_hash, _obj_state(o)) for o in sc.objects]
                   for (sc, _k, _e) in self._buffer]
         states.append([(o.shape_hash, _obj_state(o)) for o in scene.objects])
