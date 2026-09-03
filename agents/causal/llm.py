@@ -277,11 +277,13 @@ def grid_to_ascii(grid) -> str:
         return ""
 
 
-def build_direct_prompt(scene, dyn, last=None) -> str:
+def build_direct_prompt(scene, dyn, last=None, context=None) -> str:
     """Prompt orientado a ACAO (distinto de build_prompt, orientado a META): serializa
     o GRID ASCII (espacial) + a cena objeto-centrica + AVAILABLE_ACTIONS + feedback da
-    ultima acao, e pede UMA proxima acao. O parsing reusa parse_goal; exec reusa execute_goal."""
+    ultima acao, e pede UMA proxima acao. O parsing reusa parse_goal; exec reusa execute_goal.
+    context: dict opcional com info estrategica (levels, actions, reward_src, moves)."""
     dyn = dyn or {}
+    ctx = context or {}
     lines = ["GRID (1 char = cor 0-f; linha = y de cima->baixo, coluna = x):",
              grid_to_ascii(getattr(scene, "grid", None)),
              f"OBJETOS ({len(scene.objects)}):"]
@@ -291,6 +293,18 @@ def build_direct_prompt(scene, dyn, last=None) -> str:
             f"size={o.size} bbox={o.bbox}"
         )
     lines.append(f"AVAILABLE_ACTIONS: {dyn.get('available', [])}   (use SO essas)")
+    # Contexto estrategico: ajuda o LLM a entender o estado do jogo
+    if ctx:
+        lines.append(f"ESTADO: acao #{ctx.get('step', '?')}, "
+                     f"niveis completados={ctx.get('levels', 0)}, "
+                     f"reward={ctx.get('reward_src', '?')}")
+        if ctx.get("moves"):
+            lines.append(f"TECLAS APRENDIDAS: {ctx['moves']}")
+        if ctx.get("productive_colors"):
+            lines.append(f"CORES PRODUTIVAS (resolveram niveis): {ctx['productive_colors']}")
+        if ctx.get("stale"):
+            lines.append(f"AVISO: agente preso ({ctx['stale']} acoes sem efeito). "
+                         "Tente algo DIFERENTE do que foi tentado.")
     if last and last.get("key"):
         eff = last.get("effect") or "nenhuma mudanca"
         lines.append(

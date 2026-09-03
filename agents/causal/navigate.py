@@ -67,7 +67,10 @@ class MovementModel:
         return m
 
 
-def navigate(scene, move):
+def navigate(scene, move, reached_ids=None):
+    """Navega o avatar ate o alvo mais proximo (cor rara, compacto).
+    reached_ids: set de object IDs ja alcancados neste nivel → exclui da selecao
+    de alvo, permitindo navegacao multi-target (tu93: 2+ exits, m0r0: pares)."""
     moves = move.moves()
     if not moves:
         return None
@@ -78,7 +81,8 @@ def navigate(scene, move):
     avatar = objs.get(aid)
     if avatar is None:
         return None
-    others = [o for o in scene.objects if o.id != aid]
+    skip = reached_ids or set()
+    others = [o for o in scene.objects if o.id != aid and o.id not in skip]
     if not others:
         return None
     freq = Counter(o.color for o in scene.objects)
@@ -86,7 +90,18 @@ def navigate(scene, move):
     target = min(others, key=lambda o: (freq[o.color],
                                         abs(o.centroid[0] - ay) + abs(o.centroid[1] - ax)))
     ty, tx = target.centroid
-    best, bd = None, abs(ty - ay) + abs(tx - ax)
+    cur_dist = abs(ty - ay) + abs(tx - ax)
+    # Alvo alcancado (distancia < 3px): marca como reached e tenta o proximo
+    if cur_dist < 3 and reached_ids is not None:
+        reached_ids.add(target.id)
+        remaining = [o for o in others if o.id != target.id]
+        if not remaining:
+            return None
+        target = min(remaining, key=lambda o: (freq[o.color],
+                                               abs(o.centroid[0] - ay) + abs(o.centroid[1] - ax)))
+        ty, tx = target.centroid
+        cur_dist = abs(ty - ay) + abs(tx - ax)
+    best, bd = None, cur_dist
     for k, (dr, dc) in moves.items():
         nd = abs(ty - (ay + dr)) + abs(tx - (ax + dc))
         if nd < bd:

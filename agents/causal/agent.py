@@ -25,7 +25,8 @@ from .typed_model import TypedWorldModel, accept_rule
 from .iw import iw_plan
 from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
                     value_fn_from_reward, accept_reward, grounded_reward_fn,
-                    grounded_multi_reward_fn, grounded_pattern_reward_fn)
+                    grounded_multi_reward_fn, grounded_pattern_reward_fn,
+                    grounded_pair_reward_fn)
 
 QUERY_COOLDOWN = 15
 GOAL_FAIL_MAX = 3
@@ -195,6 +196,14 @@ class CausalObjectAgent(Agent):
         # Garante que TODOS os jogos iniciam rapidos (~20fps) e so usam LLM quando
         # as heuristicas (navigate, cover, grounded) ja tiveram chance de agir.
         self._llm_defer = int(os.environ.get("CAUSAL_LLM_DEFER", "50"))
+        # Burst tracker: conta acoes distintas com efeito recente → dispara ACTION5 (validate)
+        self._burst_count = 0          # acoes consecutivas com efeito != none
+        self._burst_distinct = set()   # keys distintas no burst atual
+        # Navigate multi-target: IDs de objetos ja alcancados neste nivel
+        self._reached_ids = set()
+        # Click replay: ultimas N keys que produziram efeito visivel (nao "none").
+        # No proximo nivel, tenta estas keys primeiro (mesmas cores/posicoes tendem a funcionar).
+        self._effective_keys = deque(maxlen=10)   # keys que tiveram efeito recente
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -229,6 +238,9 @@ class CausalObjectAgent(Agent):
             self._prev_grid = None
             self._last_effect_kind = None
             self._stale_count = 0
+            self._burst_count = 0
+            self._burst_distinct.clear()
+            self._reached_ids.clear()
             # Limpa dados espaciais stale (layout muda entre tentativas).
             # productive_colors persiste (cross-nivel).
             self._rprog.clear()
@@ -274,6 +286,7 @@ class CausalObjectAgent(Agent):
                 self._reward_fn = None       # re-sintetiza grounded pro novo layout
                 self._reward_src = None
                 self._reward_defer = 0
+                self._reached_ids.clear()   # novo nivel → alvos resetam
                 win_scene = parse(win_grid(latest_frame.frame), hud_mask=self._hud.mask())
                 self._novelty.record_goal_anchor(state_signature(win_scene))
                 self._goal = None                     # nível cumprido → re-planejar
@@ -288,8 +301,15 @@ class CausalObjectAgent(Agent):
                 # Deteccao de "preso": acoes sem efeito
                 if actual.kind == "none":
                     self._stale_count += 1
+                    self._burst_count = 0
+                    self._burst_distinct.clear()
                 else:
                     self._stale_count = 0
+                    self._burst_count += 1
+                    self._burst_distinct.add(self._last_key)
+                    # Track keys que causaram efeito visivel
+                    if self._last_key and self._last_key not in self._effective_keys:
+                        self._effective_keys.append(self._last_key)
                 self._novelty.observe_transition(self._last_key, scene)
                 self._move.observe(self._last_key, self._prev_scene, scene)
                 cur_sig = state_signature(scene)
@@ -386,11 +406,18 @@ class CausalObjectAgent(Agent):
                 if alt:
                     best = min(alt, key=lambda c: self._cover.get(c.key, 0))
                     cand = best
-        # (3) fallback determinístico: navigate → plan → greedy
+        # (3) navigate: avatar→alvo via MovementModel (heuristico, multi-target)
         if cand is None and self._nav_on:
-            nk = navigate(scene, self._move)
+            nk = navigate(scene, self._move, reached_ids=self._reached_ids)
             if nk is not None:
                 cand = keymap.get(nk)
+        # (3c) click replay: tenta keys que tiveram efeito em niveis anteriores.
+        # Prioritiza cores produtivas (level_up) e keys efetivas (efeito visivel).
+        if cand is None and self._effective_keys:
+            for ek in self._effective_keys:
+                if ek in keymap and self._cover.get(ek, 0) < 3:
+                    cand = keymap[ek]
+                    break
         if cand is None and self._rprog_on and cands:
             rk = self._rprog_decide(cands)    # B′: progresso model-free por reward real
             if rk is not None:
@@ -412,12 +439,17 @@ class CausalObjectAgent(Agent):
             row = self._rprog.get(self._last_key)
             if row and len(row) >= 1 and row[-1] < -0.5:
                 cand = keymap["ACTION7"]
-        # ACTION5 periodico: validar/grab/ciclar/disparar. Muitos jogos exigem
-        # ACTION5 apos montar o estado (sb26=run, wa30=grab, cd82=fire, sp80=flow).
-        # Tenta a cada 15 acoes se houve mudanca de estado (efeito != none recente).
+        # ACTION5 burst: validar apos 3+ acoes distintas com efeito (sb26: click-click-RUN,
+        # wa30: grab+move+drop, cd82: fire apos montar). Mais responsivo que o periodico.
+        if (cand is None and "ACTION5" in keymap
+                and self._burst_count >= 3 and len(self._burst_distinct) >= 2):
+            cand = keymap["ACTION5"]
+            self._burst_count = 0
+            self._burst_distinct.clear()
+        # ACTION5 periodico (fallback): tenta a cada 8 acoes se houve efeitos recentes.
         if (cand is None and "ACTION5" in keymap
                 and self.action_counter >= 8
-                and self.action_counter % 15 < 2
+                and self.action_counter % 8 < 2
                 and any(e != "none" for e in list(self._seen_effects)[:5])):
             cand = keymap["ACTION5"]
         if cand is None and self._iw_on and cands:
@@ -466,9 +498,12 @@ class CausalObjectAgent(Agent):
             self._pending_log = None
             return GameAction.RESET
         # Reset voluntário: se preso (N ações sem efeito), reseta o nível.
-        # Stale_max adaptativo: proporcional ao numero de candidatos (mais opcoes
-        # = mais paciencia). Min 15, max _stale_max (default 30).
-        adaptive_stale = max(15, min(self._stale_max, len(cands) * 3))
+        # Click-only: stale mais agressivo (12) — cliques sem efeito = layout ruim,
+        # reset rapido tenta outro layout. Keyboard: proporcional aos candidatos.
+        if not has_keyboard:
+            adaptive_stale = 12
+        else:
+            adaptive_stale = max(15, min(self._stale_max, len(cands) * 3))
         if self._stale_count >= adaptive_stale:
             self._stale_count = 0
             self._pending_log = None
@@ -561,8 +596,16 @@ class CausalObjectAgent(Agent):
         self._direct_calls += 1
         dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
         last = {"key": self._last_key, "effect": self._last_effect_kind}
+        ctx = {
+            "step": self.action_counter,
+            "levels": self._last_level,
+            "reward_src": self._reward_src,
+            "moves": moves or None,
+            "productive_colors": sorted(self._productive_colors) or None,
+            "stale": self._stale_count if self._stale_count >= 5 else None,
+        }
         try:
-            resp = self._llm.complete(build_direct_prompt(scene, dyn, last))
+            resp = self._llm.complete(build_direct_prompt(scene, dyn, last, context=ctx))
             g = parse_goal(resp)
             key = execute_goal(g, scene, moves) if g is not None else None
         except Exception:
@@ -812,6 +855,14 @@ class CausalObjectAgent(Agent):
             if tops and bots:
                 self._reward_fn = grounded_pattern_reward_fn()
                 self._reward_src = "grounded:pattern(topo-vs-baixo)"
+                return True
+            # classe PARES/MIRROR (m0r0, ls20): convergencia de objetos de mesma forma
+            shapes = set(o.shape_hash for o in objs if o.size <= 64)
+            pair_shapes = sum(1 for s in shapes
+                              if sum(1 for o in objs if o.shape_hash == s and o.size <= 64) >= 2)
+            if pair_shapes:
+                self._reward_fn = grounded_pair_reward_fn()
+                self._reward_src = "grounded:pair-converge(same-shape,small)"
                 return True
             # grounded on mas sem estrutura util -> so cai no LLM apos o deferimento
             if self.action_counter < self._llm_defer or self._llm_calls >= self._llm_max:

@@ -125,6 +125,33 @@ def grounded_pattern_reward_fn(split=32, max_size=64):
     return reward_function
 
 
+def grounded_pair_reward_fn(max_size=64):
+    """Reward por-classe p/ jogos de PARES/MIRROR (m0r0, ls20): soma das distancias
+    minimas entre objetos PEQUENOS de cores DIFERENTES agrupados por proximidade.
+    Complementa multi_reward (mesma cor) com logica de convergencia de pares distintos.
+    goal_flag quando total de pares <= 1. Safe."""
+    def reward_function(state):
+        try:
+            pts = [(o["x"], o["y"], o["color"], o.get("shape", 0))
+                   for _, o in state if o.get("size", 10 ** 9) <= max_size]
+            if len(pts) < 2:
+                return (0.0, False)
+            # Para pares mirror/shape: minimiza soma de distancias entre objetos
+            # de mesmo shape (forma) mas cor diferente → convergencia de pares
+            by_shape = {}
+            for x, y, c, s in pts:
+                by_shape.setdefault(s, []).append((x, y, c))
+            total = 0
+            for objs in by_shape.values():
+                if len(objs) >= 2:
+                    total += min(abs(a[0] - b[0]) + abs(a[1] - b[1])
+                                 for i, a in enumerate(objs) for b in objs[i + 1:])
+            return (-float(total), total == 0)
+        except Exception:
+            return (0.0, False)
+    return reward_function
+
+
 def grounded_count_reward_fn(max_size=64):
     """Reward por-classe p/ SOKOBAN/PEG (docs/GAMES.md): conta objetos pequenos —
     menos objetos = melhor (pegs removidos) ou mais objetos numa zona = melhor
