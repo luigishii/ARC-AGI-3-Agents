@@ -7,6 +7,8 @@ HUD_MIN_SAMPLES = 5
 
 
 class HudMask:
+    _SEED = 10   # valor alto p/ seedar linhas/colunas conhecidas como HUD
+
     """Detecta o HUD por independência-de-ação em bandas (linha/coluna).
 
     Um HUD (contador/timer/barra) muda a cada ação, independente de onde se clica.

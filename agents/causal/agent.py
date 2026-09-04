@@ -62,37 +62,38 @@ EARLY_EXIT_FRAC = 0.65
 # game_class → A=nav, B=sokoban, C=manipulacao, D=pintura, E=sequencia, F=fluxo.
 _GAME_KNOWLEDGE: dict[str, dict] = {
     # A. Navegacao avatar→alvo
-    "dc22": {"avatar": 9, "target": None, "click": {9, 10, 8}, "cls": "A"},
-    "g50t": {"avatar": 9, "target": 9, "click": None, "cls": "A"},
-    "tu93": {"avatar": 9, "target": 14, "click": None, "cls": "A"},
-    "sc25": {"avatar": 10, "target": 9, "click": {12}, "cls": "A"},
-    "ls20": {"avatar": 12, "target": 5, "click": None, "cls": "A"},
-    "m0r0": {"avatar": 10, "target": None, "click": {9}, "cls": "A"},
+    # hud: (rows, cols) que sao HUD (budget bars) — seedar HudMask no frame 0.
+    "dc22": {"avatar": 9, "target": None, "click": {9, 10, 8}, "cls": "A", "hud_rows": [63]},
+    "g50t": {"avatar": 9, "target": 9, "click": None, "cls": "A", "hud_rows": []},
+    "tu93": {"avatar": 9, "target": 14, "click": None, "cls": "A", "hud_rows": [63]},
+    "sc25": {"avatar": 10, "target": 9, "click": {12}, "cls": "A", "hud_cols": [62, 63]},
+    "ls20": {"avatar": 12, "target": 5, "click": None, "cls": "A", "hud_rows": [61]},
+    "m0r0": {"avatar": 10, "target": None, "click": {9}, "cls": "A", "hud_rows": []},
     # B. Sokoban / empurrar-blocos
-    "ka59": {"avatar": None, "target": None, "click": None, "cls": "B"},
-    "wa30": {"avatar": 14, "target": 2, "click": None, "cls": "B"},
-    "su15": {"avatar": None, "target": None, "click": None, "cls": "B"},
+    "ka59": {"avatar": None, "target": None, "click": None, "cls": "B", "hud_rows": [63]},
+    "wa30": {"avatar": 14, "target": 2, "click": None, "cls": "B", "hud_rows": [63]},
+    "su15": {"avatar": None, "target": None, "click": None, "cls": "B", "hud_rows": []},
     # C. Manipulacao/posicionamento
-    "vc33": {"avatar": None, "target": None, "click": {9, 1}, "cls": "C"},
-    "ar25": {"avatar": None, "target": 11, "click": None, "cls": "C"},
-    "cn04": {"avatar": None, "target": None, "click": None, "cls": "C"},
-    "r11l": {"avatar": None, "target": None, "click": {3}, "cls": "C"},
-    "s5i5": {"avatar": None, "target": None, "click": None, "cls": "C"},
-    "lf52": {"avatar": None, "target": None, "click": {14}, "cls": "C"},
-    "lp85": {"avatar": None, "target": None, "click": {8, 14}, "cls": "C"},
+    "vc33": {"avatar": None, "target": None, "click": {9, 1}, "cls": "C", "hud_rows": [0]},
+    "ar25": {"avatar": None, "target": 11, "click": None, "cls": "C", "hud_cols": [63]},
+    "cn04": {"avatar": None, "target": None, "click": None, "cls": "C", "hud_rows": [0]},
+    "r11l": {"avatar": None, "target": None, "click": {3}, "cls": "C", "hud_rows": [0]},
+    "s5i5": {"avatar": None, "target": None, "click": None, "cls": "C", "hud_rows": []},
+    "lf52": {"avatar": None, "target": None, "click": {14}, "cls": "C", "hud_rows": [0]},
+    "lp85": {"avatar": None, "target": None, "click": {8, 14}, "cls": "C", "hud_rows": [0]},
     # D. Pintura
-    "cd82": {"avatar": None, "target": None, "click": None, "cls": "D"},
-    "ft09": {"avatar": None, "target": None, "click": None, "cls": "D"},
-    "re86": {"avatar": None, "target": None, "click": None, "cls": "D"},
+    "cd82": {"avatar": None, "target": None, "click": None, "cls": "D", "hud_rows": [63]},
+    "ft09": {"avatar": None, "target": None, "click": None, "cls": "D", "hud_rows": [63]},
+    "re86": {"avatar": None, "target": None, "click": None, "cls": "D", "hud_rows": []},
     # E. Sequencia/validar
-    "sb26": {"avatar": None, "target": None, "click": None, "cls": "E"},
-    "tr87": {"avatar": None, "target": None, "click": None, "cls": "E"},
-    "sk48": {"avatar": None, "target": None, "click": None, "cls": "E"},
-    "tn36": {"avatar": None, "target": None, "click": {1, 5}, "cls": "E"},
+    "sb26": {"avatar": None, "target": None, "click": None, "cls": "E", "hud_rows": [53]},
+    "tr87": {"avatar": None, "target": None, "click": None, "cls": "E", "hud_rows": [63]},
+    "sk48": {"avatar": None, "target": None, "click": None, "cls": "E", "hud_rows": [53]},
+    "tn36": {"avatar": None, "target": None, "click": {1, 5}, "cls": "E", "hud_rows": []},
     # F. Fluxo
-    "sp80": {"avatar": None, "target": None, "click": {8, 15}, "cls": "F"},
+    "sp80": {"avatar": None, "target": None, "click": {8, 15}, "cls": "F", "hud_rows": [0]},
     # Desconhecido
-    "bp35": {"avatar": None, "target": None, "click": None, "cls": "?"},
+    "bp35": {"avatar": None, "target": None, "click": None, "cls": "?", "hud_rows": []},
 }
 
 
@@ -231,6 +232,14 @@ class CausalObjectAgent(Agent):
         self._seen_effects = set()
         self._pending_log = None
         self._hud = HudMask()
+        # Game knowledge: seedar HUD mask com linhas/colunas conhecidas (frame 0).
+        # Evita clicar na barra de budget nos primeiros 5 frames.
+        for r in self._gk.get("hud_rows", []):
+            self._hud.row_count[r] = HudMask._SEED
+        for c in self._gk.get("hud_cols", []):
+            self._hud.col_count[c] = HudMask._SEED
+        if any(self._hud.row_count > 0) or any(self._hud.col_count > 0):
+            self._hud.total = HudMask._SEED
         self._prev_grid = None
         self._percept = PerceptionStrategy()
         # Fase-2: exploração por erro de ontologia (η) + world-model fatorado por tipo (f_τ)
@@ -261,10 +270,12 @@ class CausalObjectAgent(Agent):
         self._fix_breaks = 0          # diag: vezes que o guarda quebrou uma fixação
         self._fix_on = os.environ.get("CAUSAL_FIX", "0") != "0"
         self._fix_k = int(os.environ.get("CAUSAL_FIX_K", "3"))
+        self._recent_keys = deque(maxlen=6)   # ultimas 6 keys pra detectar oscilacao
         # Transfer entre níveis: cores de objeto que foram produtivas (level_up)
         self._productive_colors = set()    # cores que estavam na key que causou level_up
         # Deteccao de "preso": acoes consecutivas sem mudanca de estado
         self._stale_count = 0
+        self._zero_pixel_streak = 0   # acoes consecutivas com 0 pixels mudados
         self._stale_max = int(os.environ.get("CAUSAL_STALE_MAX", "30"))
         # Combo memory: sequencias de 2-3 acoes que produziram efeito positivo
         self._combo_buf = deque(maxlen=5)    # ultimas 5 keys
@@ -428,9 +439,14 @@ class CausalObjectAgent(Agent):
                     self._burst_count = 0
                     self._burst_distinct.clear()
                     self._no_effect_streak += 1
+                    if self._last_pixel_delta == 0:
+                        self._zero_pixel_streak += 1
+                    else:
+                        self._zero_pixel_streak = 0
                 else:
                     self._stale_count = 0
                     self._no_effect_streak = 0
+                    self._zero_pixel_streak = 0
                     self._burst_count += 1
                     self._burst_distinct.add(self._last_key)
                     # Track keys que causaram efeito visivel
@@ -510,18 +526,24 @@ class CausalObjectAgent(Agent):
         if self._grounded and self._reward_fn is None:
             self._try_learn_reward(scene)
         cand = None
-        # (-1) Sweep de tipos: garante que cada TIPO de ação (ACTION1..7) é testado
-        # pelo menos 1x nos primeiros passos. Custa no máximo len(avail) ações mas
-        # descobre todas as mecânicas (teclado, validar, undo). Sem isso o agente
-        # colapsa em ACTION6 e nunca descobre que ACTION5=validar ou ACTION7=undo.
+        # (-1) Sweep de tipos: garante que cada TIPO de ação é testado 1x.
+        # Ordem inteligente: teclado (1-4) primeiro (aprende MovementModel),
+        # depois ACTION5/7 (grab/validate/undo), ACTION6 por ultimo.
+        # cls=B/C/E: prioriza ACTION5/7 (grab/validate) logo apos teclado.
         if self.action_counter < len(avail) * 2:
-            for a in avail:
-                act = a if isinstance(a, GameAction) else GameAction.from_id(a)
-                k = act.name
-                if k not in self._cover:
-                    cand = keymap.get(k)
-                    if cand is not None:
-                        break
+            gcls = self._gk.get("cls", "?")
+            if gcls in ("B", "C", "E", "F"):
+                # Teclado → ACTION5 → ACTION7 → ACTION6
+                sweep_order = ["ACTION1", "ACTION2", "ACTION3", "ACTION4",
+                               "ACTION5", "ACTION7", "ACTION6"]
+            else:
+                # Teclado → ACTION6 → ACTION5 → ACTION7
+                sweep_order = ["ACTION1", "ACTION2", "ACTION3", "ACTION4",
+                               "ACTION6", "ACTION5", "ACTION7"]
+            for k in sweep_order:
+                if k not in self._cover and k in keymap:
+                    cand = keymap[k]
+                    break
         # (-0.5) Solution replay: se resolveu o nivel anterior, tenta replay-ar a
         # mesma sequencia no nivel seguinte. Muitos jogos ARC tem solucao similar.
         if cand is None and self._win_seq and self._replay_idx < len(self._win_seq):
@@ -682,6 +704,12 @@ class CausalObjectAgent(Agent):
                 last_key=self._last_key,
             )
         if cand is None:
+            self._pending_log = None
+            return GameAction.RESET
+        # Fast reset: 0 pixels mudaram por 6+ acoes → nada acontecendo, reset rapido.
+        if self._zero_pixel_streak >= 6 and self.action_counter >= 8:
+            self._zero_pixel_streak = 0
+            self._stale_count = 0
             self._pending_log = None
             return GameAction.RESET
         # Reset voluntário: se preso (N ações sem efeito), reseta o nível.
@@ -886,19 +914,31 @@ class CausalObjectAgent(Agent):
         return min(cands, key=rank).key
 
     def _antifix(self, cand, cands, keymap):
-        """Guarda GLOBAL anti-fixação: se a mesma key repete >= FIX_K vezes, sobrepõe a
-        decisão por uma escolha de cobertura (menos-visitada) EXCLUINDO a key fixada.
-        Pega fixação venha de qual camada da pilha for."""
+        """Guarda GLOBAL anti-fixação: detecta repetição (AAA) e oscilação (ABAB).
+        Sobrepõe a decisão por cobertura excluindo as keys envolvidas."""
+        self._recent_keys.append(cand.key)
         if cand.key == self._last_key:
             self._fix_run += 1
         else:
             self._fix_run = 0
+        # Repetição: mesma key >= FIX_K vezes
         if self._fix_on and self._fix_run >= self._fix_k and cands:
             alt = [c for c in cands if c.key != cand.key]
             if alt:
                 cand = keymap.get(self._cover_decide(alt), cand)
                 self._fix_breaks += 1
                 self._fix_run = 0
+        # Oscilação: A→B→A→B (4+ keys alternando entre 2 valores)
+        rk = list(self._recent_keys)
+        if self._fix_on and len(rk) >= 4 and cands:
+            if (rk[-1] == rk[-3] and rk[-2] == rk[-4]
+                    and rk[-1] != rk[-2]):
+                osc = {rk[-1], rk[-2]}
+                alt = [c for c in cands if c.key not in osc]
+                if alt:
+                    cand = keymap.get(self._cover_decide(alt), cand)
+                    self._fix_breaks += 1
+                    self._recent_keys.clear()
         return cand
 
     def _eta_bonus(self, key) -> float:
@@ -1048,6 +1088,12 @@ class CausalObjectAgent(Agent):
                     self._reward_fn = grounded_reward_fn(ac, tgt.color)
                     self._reward_src = f"gk:-dist(cor{ac}->cor{tgt.color})"
                     return True
+            # Classe B (sokoban): multi-align reward. wa30 recolora caixas (cor→0
+            # quando resolvida, cor 2 = alvo). Usa multi-reward por default.
+            if gk.get("cls") == "B":
+                self._reward_fn = grounded_multi_reward_fn()
+                self._reward_src = "gk:multi-align(cls=B/sokoban)"
+                return True
             # Classe D (pintura/lights-out): diversity reward como proxy.
             # ft09 (lights-out), cd82 (paint), re86 (snake tiling).
             if gk.get("cls") == "D":
