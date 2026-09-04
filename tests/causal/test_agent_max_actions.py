@@ -1,4 +1,4 @@
-from agents.causal.agent import CausalObjectAgent
+from agents.causal.agent import UNKNOWN_BUDGET, CausalObjectAgent
 
 
 def _agent():
@@ -9,10 +9,12 @@ def _agent():
     return a
 
 
-def test_default_max_actions_is_80(monkeypatch):
+def test_default_max_actions_is_unknown_budget(monkeypatch):
+    # Era 80 (e o early-exit cortava na acao 52). Jogo nao-visto e exatamente o caso
+    # da eval privada; medido nos 25 jogos, o teto apertado custava metade do score.
     monkeypatch.delenv("CAUSAL_MAX_ACTIONS", raising=False)
     a = _agent()
-    assert a.MAX_ACTIONS == 80
+    assert a.MAX_ACTIONS == UNKNOWN_BUDGET
 
 
 def test_env_overrides_max_actions(monkeypatch):

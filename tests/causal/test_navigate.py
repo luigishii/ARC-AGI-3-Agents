@@ -23,8 +23,9 @@ def test_moved_object_single():
 
 
 def test_moved_object_ambiguous_is_none():
+    # 2 movers rigidos com vetores DISTINTOS = 2 entidades -> ambiguo (mesmo vetor = composto)
     prev = _scene([_obj([(0, 0)], oid=1), _obj([(5, 5)], oid=2)])
-    curr = _scene([_obj([(0, 1)], oid=1), _obj([(5, 6)], oid=2)])
+    curr = _scene([_obj([(0, 1)], oid=1), _obj([(6, 5)], oid=2)])
     assert _moved_object(prev, curr) is None
 
 

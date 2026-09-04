@@ -18,8 +18,35 @@ def _moved_object(prev, curr):
         if (dr, dc) == (0, 0):
             continue
         if o.shape_hash == po.shape_hash and o.size == po.size:
-            rigid.append((o.id, (dr, dc)))
-    return rigid[0] if len(rigid) == 1 else None
+            rigid.append((o.id, (dr, dc), o.size))
+    if not rigid:
+        return None
+    # Avatar COMPOSTO (ex. ls20: peças cor 12 + cor 9 transladam juntas): movers rígidos
+    # com o MESMO vetor são uma entidade -> devolve a maior parte. Vetores distintos =
+    # ambíguo (2 entidades) -> None.
+    vectors = {v for _, v, _ in rigid}
+    if len(vectors) != 1:
+        return None
+    oid, v, _ = max(rigid, key=lambda t: t[2])
+    return (oid, v)
+
+
+def _moved_group(prev, curr):
+    """Como _moved_object, mas devolve (ids de TODAS as partes co-movidas, vetor)."""
+    m = _moved_object(prev, curr)
+    if m is None:
+        return None
+    oid, v = m
+    prevmap = {o.id: o for o in prev.objects}
+    ids = set()
+    for o in curr.objects:
+        po = prevmap.get(o.id)
+        if po is None or o.shape_hash != po.shape_hash or o.size != po.size:
+            continue
+        if (round(o.centroid[0] - po.centroid[0]), round(o.centroid[1] - po.centroid[1])) == v:
+            ids.add(o.id)
+    ids.add(oid)
+    return (ids, v)
 
 
 class MovementModel:
@@ -27,15 +54,19 @@ class MovementModel:
         self.vec = {}            # action_key -> {(dr,dc) -> count}
         self.avatar_counts = {}  # obj_id -> count
         self.blocked = {}        # action_key -> count de vezes que NAO moveu o avatar
+        self.companions = {}     # obj_id -> set(ids que co-movem com ele) (avatar composto)
 
     def observe(self, key, prev, curr) -> None:
-        m = _moved_object(prev, curr)
-        if m is None:
+        g = _moved_group(prev, curr)
+        if g is None:
             # Se a key ja tinha vetor aprendido mas nao moveu → parede/bloqueio
             if key in self.vec and "@" not in key:
                 self.blocked[key] = self.blocked.get(key, 0) + 1
             return
-        oid, v = m
+        ids, v = g
+        oid = _moved_object(prev, curr)[0]
+        if len(ids) > 1:
+            self.companions.setdefault(oid, set()).update(ids - {oid})
         self.vec.setdefault(key, {})
         self.vec[key][v] = self.vec[key].get(v, 0) + 1
         self.avatar_counts[oid] = self.avatar_counts.get(oid, 0) + 1
@@ -54,11 +85,19 @@ class MovementModel:
             return None
         return max(self.avatar_counts.items(), key=lambda kv: kv[1])[0]
 
+    def avatar_parts(self) -> set:
+        """Avatar + partes que co-movem com ele (nunca sao alvo de navegacao)."""
+        aid = self.avatar_id()
+        if aid is None:
+            return set()
+        return {aid} | set(self.companions.get(aid, ()))
+
     def to_dict(self) -> dict:
         return {
             "vec": {k: {f"{dr},{dc}": n for (dr, dc), n in d.items()}
                     for k, d in self.vec.items()},
             "avatar_counts": {str(o): n for o, n in self.avatar_counts.items()},
+            "companions": {str(o): sorted(ids) for o, ids in self.companions.items()},
         }
 
     @classmethod
@@ -70,6 +109,7 @@ class MovementModel:
                 dr, dc = s.split(",")
                 m.vec[k][(int(dr), int(dc))] = n
         m.avatar_counts = {int(o): n for o, n in d.get("avatar_counts", {}).items()}
+        m.companions = {int(o): set(ids) for o, ids in d.get("companions", {}).items()}
         return m
 
 
@@ -98,7 +138,7 @@ def navigate(scene, move, reached_ids=None, target_color=None):
     avatar = objs.get(aid)
     if avatar is None:
         return None
-    skip = reached_ids or set()
+    skip = (reached_ids or set()) | move.avatar_parts()   # partes do avatar nunca sao alvo
     others = [o for o in scene.objects if o.id != aid and o.id not in skip]
     if not others:
         return None

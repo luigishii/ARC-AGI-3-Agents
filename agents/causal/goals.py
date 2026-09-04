@@ -60,19 +60,30 @@ def value_fn_from_reward(reward_fn):
     return value
 
 
-def grounded_reward_fn(avatar_color, target_color):
+def grounded_reward_fn(avatar_color, target_color, avatar_size=None, target_size=None):
     """Reward GROUNDED (calculada, NÃO chutada pelo LLM): -manhattan(avatar, alvo),
     ancorada por COR (estável entre frames, ao contrário de índice). goal_flag quando
     distância==0. Exception-safe (entrada ruim -> (0,False)). Lição do docs/GAMES.md:
-    a vitória é sempre espacial/grounded, nunca contagem-de-cor."""
+    a vitória é sempre espacial/grounded, nunca contagem-de-cor.
+
+    avatar_size/target_size desempatam quando VÁRIOS objetos têm a mesma cor (o ls20
+    tem 5 objetos cor 9): escolhe o de tamanho mais próximo em vez do primeiro da
+    lista. O tamanho serve de âncora porque transladar o avatar é movimento rígido."""
+    def _pick(objs, color, size):
+        same = [o for o in objs if o.get("color") == color]
+        if not same:
+            return None
+        if size is None:
+            return same[0]
+        return min(same, key=lambda o: abs(o.get("size", 0) - size))
+
     def reward_function(state):
         try:
             objs = [a for _, a in state]
-            av = [o for o in objs if o.get("color") == avatar_color]
-            tg = [o for o in objs if o.get("color") == target_color]
-            if not av or not tg:
+            a = _pick(objs, avatar_color, avatar_size)
+            t = _pick(objs, target_color, target_size)
+            if a is None or t is None:
                 return (0.0, False)
-            a, t = av[0], tg[0]
             d = abs(a["x"] - t["x"]) + abs(a["y"] - t["y"])
             return (-float(d), d == 0)
         except Exception:

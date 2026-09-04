@@ -38,6 +38,10 @@ TYPE_MIN_OBS = 3          # transições mínimas p/ tentar sintetizar f_τ
 TYPE_BUF_MAX = 64         # transições guardadas por tipo
 TYPE_COOLDOWN = 8         # cadência esparsa da síntese de regra de tipo
 REWARD_DEFER_MAX = 4      # ticks elegíveis a esperar o avatar antes de sintetizar a reward
+# Modo cego + teclado: a sintese GROUNDED espera o avatar ser aprendido pelo movimento
+# (sweep ~8 acoes + observacoes) antes de congelar um fallback (multi-align/pattern).
+GROUNDED_DEFER_MAX = 16
+_REWARD_FALLBACK_PREFIXES = ("grounded:multi", "grounded:pattern", "grounded:pair")
 
 # Budget dinamico por classe de jogo. Click-only resolve L0 em 5-13 acoes,
 # nao precisa de 200. Navegacao simples ~30 acoes. Complexos podem gastar mais.
@@ -56,9 +60,15 @@ _GAME_BUDGETS: dict[str, int] = {
 }
 
 # Budget por CLASSE inferida (jogo nao-visto, sem env e sem prefixo na tabela acima).
-# Click-only (sem tecla no available) = 80 independente da classe.
-_CLASS_BUDGETS: dict[str, int] = {"A": 150, "B": 200, "C": 200, "D": 200, "E": 200, "F": 200}
-_CLICK_ONLY_BUDGET = 80
+_CLASS_BUDGETS: dict[str, int] = {"A": 200, "B": 200, "C": 200, "D": 200, "E": 200, "F": 200}
+# Click-only era 80 "porque L0 resolve em 5-13 acoes" -- mas esse e o baseline OTIMO,
+# nao o que o NOSSO explorador gasta: medido nos 25 jogos, quem cruza gasta 24-201.
+_CLICK_ONLY_BUDGET = 200
+# Budget do jogo NAO-VISTO (o caso da eval privada: _GAME_BUDGETS nunca casa).
+# Era o default de classe (80) -> early-exit na acao 52. Medido nos 25 jogos em modo
+# cego: budget por-jogo = 2 niveis; budget 200 para todos = 4 niveis (tn36 e lf52 so
+# cruzam com folga; tn36 cruzou na acao 88). A politica de orcamento valia metade do score.
+UNKNOWN_BUDGET = 200
 
 # Cap GLOBAL de chamadas LLM por processo (todas as threads do Swarm). gpt-oss ~30s/chamada
 # serializado por lock: N jogos x chamadas ilimitadas = o run inteiro na fila do LLM.
@@ -66,6 +76,19 @@ _LLM_TOTAL = {"calls": 0}
 
 # Fracao do budget apos a qual, sem level_up, o agente desiste (early-exit).
 EARLY_EXIT_FRAC = 0.65
+# ... mas so desiste se parou de DESCOBRIR ha esse tanto de acoes. Sem esta guarda o
+# corte por fracao mata o jogo no meio do aprendizado (tn36 cruzava na acao 88).
+DISCOVERY_PATIENCE = 25
+# Piso absoluto do early-exit agressivo ("nenhum efeito"): a varredura de cliques tem
+# 36 celulas, entao desistir na acao 24 (caso ft09) e desistir no meio do 1o sweep.
+MIN_SWEEP_ACTIONS = 40
+# Objeto menor que isso e ruido de percepcao (buraco no fundo), nunca alvo.
+MIN_TARGET_SIZE = 4
+# Cor 0 = vazio/fundo na paleta do AGI-3: nunca e avatar nem alvo.
+EMPTY_COLOR = 0
+# Fracao da area percebida acima da qual uma cor e considerada FUNDO (no ls20 a cor
+# dominante ocupa 63% do grid). Alto de proposito: so exclui fundo de verdade.
+BG_SHARE = 0.5
 
 # Conhecimento decodificado dos 25 jogos (docs/GAMES.md). Injeta priors no agente:
 # avatar_color/target_color → grounded reward + navigate sem adivinhar.
@@ -155,12 +178,40 @@ def _spatial_context(objects) -> str:
     return "\n".join(lines)
 
 
-def _pick_target(objects, avatar_idx):
-    """Alvo provável: objeto não-avatar, cor rara, compacto (não fundo/barra). Índice ou None."""
-    objs = list(objects)[:8]
-    cand = [i for i in range(len(objs)) if i != avatar_idx]
+def _background_colors(scene) -> set:
+    """Cores que são fundo, nunca avatar nem alvo: a cor vazia (0) e qualquer cor que
+    cubra sozinha mais de BG_SHARE da área percebida. Medido nos 25 jogos: sem esta
+    guarda a reward ancorava na cor 0 (buraco de 3px no fundo) em 5 dos 25.
+
+    Deliberadamente NÃO usa "cor do maior objeto": numa cena esparsa o maior objeto é
+    um objeto de jogo legítimo, e a regra derrubava o avatar real."""
+    objs = list(getattr(scene, "objects", scene) or ())
+    if not objs:
+        return {EMPTY_COLOR}
+    px: dict = {}
+    for o in objs:
+        px[o.color] = px.get(o.color, 0) + o.size
+    total = sum(px.values()) or 1
+    return {EMPTY_COLOR} | {c for c, n in px.items() if n / total > BG_SHARE}
+
+
+def _pick_target(objects, avatar_idx, limit=8, exclude_ids=None, bg_colors=None):
+    """Alvo provável: objeto não-avatar, cor rara, compacto (não fundo/barra). Índice ou None.
+    limit=8 = janela do prompt do LLM; limit=None = todos (reward grounded).
+    exclude_ids: partes co-movidas do avatar (nunca são alvo).
+    bg_colors: cores de fundo/vazio a descartar (ver _background_colors)."""
+    objs = list(objects) if limit is None else list(objects)[:limit]
+    # ids são None no parse (só o matching os atribui): um None em skip excluiria TUDO.
+    skip = {i for i in (exclude_ids or ()) if i is not None}
+    cand = [i for i in range(len(objs))
+            if i != avatar_idx and (not skip or getattr(objs[i], "id", None) not in skip)]
     if not cand:
         return None
+    # Descarta fundo/vazio e ruído de percepção. Se a exclusão esvaziar, mantém o
+    # conjunto anterior — o alvo pode ficar errado, mas nunca pior que antes.
+    bg = set(bg_colors or ())
+    cand = [i for i in cand
+            if objs[i].size >= MIN_TARGET_SIZE and objs[i].color not in bg] or cand
     color_count = {}
     for o in objs:
         color_count[o.color] = color_count.get(o.color, 0) + 1
@@ -197,20 +248,25 @@ class CausalObjectAgent(Agent):
         # Budget dinamico: usa mapeamento por jogo se env var nao foi setada explicitamente.
         env_budget = os.environ.get("CAUSAL_MAX_ACTIONS")
         gid = getattr(self, "game_id", "")
-        known_budget = any(gid.startswith(prefix) for prefix in _GAME_BUDGETS)
+        # CAUSAL_GK=0 ("modo cego") tem que valer para o BUDGET tambem: a eval privada
+        # e de jogos nao-vistos, entao ler _GAME_BUDGETS por game_id em modo cego dava
+        # uma vantagem que a eval nao tem -- e falseava a medicao.
+        gk_on = os.environ.get("CAUSAL_GK", "1") != "0"
+        known_budget = gk_on and any(gid.startswith(prefix) for prefix in _GAME_BUDGETS)
         # Budget fixo (env ou tabela) NAO e substituido pela classe inferida.
         self._budget_fixed = env_budget is not None or known_budget
         if env_budget is not None:
             self.MAX_ACTIONS = int(env_budget)
-        else:
+        elif known_budget:
             self.MAX_ACTIONS = next(
-                (b for prefix, b in _GAME_BUDGETS.items() if gid.startswith(prefix)),
-                type(self).MAX_ACTIONS,
+                b for prefix, b in _GAME_BUDGETS.items() if gid.startswith(prefix)
             )
+        else:
+            # Jogo nao-visto (o caso da eval): antes caia em 80 e desistia na acao 52.
+            self.MAX_ACTIONS = UNKNOWN_BUDGET
         # Game knowledge: prior decodificado das mecanicas (docs/GAMES.md).
         # CAUSAL_GK=0 = "modo cego": ignora a tabela por-jogo -> simula a eval privada
         # (jogos nao-vistos); e o run que mede o que de fato transfere.
-        gk_on = os.environ.get("CAUSAL_GK", "1") != "0"
         self._gk = _game_knowledge(getattr(self, "game_id", "")) if gk_on else {}
         self._gk_src = f"table:{self._gk.get('cls', '?')}" if self._gk else None
         # Inferencia de CLASSE via LLM (1 chamada/jogo) quando a tabela nao conhece o
@@ -260,6 +316,10 @@ class CausalObjectAgent(Agent):
         self._last_predicted = None
         self._last_level = 0
         self._seen_effects = set()
+        # Anti-desistencia-prematura: ultima acao em que algo NOVO apareceu (efeito
+        # != none, ou uma action_key inedita). Alimenta a guarda do early-exit.
+        self._last_discovery = 0
+        self._tried_keys: set = set()
         self._pending_log = None
         self._hud = HudMask()
         # Game knowledge: seedar HUD mask com linhas/colunas conhecidas (frame 0).
@@ -279,6 +339,8 @@ class CausalObjectAgent(Agent):
         self._reward_src = None
         self._reward_rejected = 0     # diag: rewards barradas pelo check comportamental
         self._reward_defer = 0        # ticks já esperados pelo avatar (gate de síntese)
+        self._grounded_defer = 0      # acoes esperadas pelo avatar antes do fallback grounded
+        self._reward_upgradable = False   # fallback grounded pode virar nav quando avatar aparecer
         self._iw_goal_calls = 0       # diag: IW rodou goal-directed (reward viva)
         self._iw_goal_hits = 0        # diag: IW achou caminho até a meta
         self._reward_real_true = 0    # diag: reward_fn deu goal_flag=True em cena real
@@ -333,16 +395,21 @@ class CausalObjectAgent(Agent):
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         if latest_frame.state is GameState.WIN:
             return True
-        # Early-exit: se gastou 65%+ do budget sem nenhum level_up, desiste.
-        # Libera tempo para os proximos jogos na fila sequencial.
+        # Early-exit: gastou 65%+ do budget sem level_up E parou de descobrir.
+        # A 2a condicao e o que salva o jogo que ainda esta aprendendo: sem ela o
+        # corte por fracao matava o tn36 na acao 52, e ele cruzava na 88.
         levels = latest_frame.levels_completed or 0
+        stuck = self.action_counter - self._last_discovery
         if (levels == 0 and self.MAX_ACTIONS > 0
-                and self.action_counter >= self.MAX_ACTIONS * EARLY_EXIT_FRAC):
+                and self.action_counter >= self.MAX_ACTIONS * EARLY_EXIT_FRAC
+                and stuck >= DISCOVERY_PATIENCE):
             return True
-        # Aggressive early-exit: 30% do budget gastou e NENHUM efeito detectado
-        # (nem pixel) → jogo provavelmente incompativel, nao perde mais tempo.
+        # Aggressive early-exit: nenhum efeito detectado (nem pixel) → jogo
+        # provavelmente incompativel. Exige uma varredura minima antes de desistir:
+        # com 36 celulas de clique, o corte em 30% do budget (24 acoes no ft09)
+        # desistia no meio do 1o sweep.
         if (levels == 0 and self.MAX_ACTIONS > 0
-                and self.action_counter >= self.MAX_ACTIONS * 0.3
+                and self.action_counter >= max(MIN_SWEEP_ACTIONS, self.MAX_ACTIONS * 0.3)
                 and not self._seen_effects - {"none"}):
             return True
         return False
@@ -412,6 +479,11 @@ class CausalObjectAgent(Agent):
             actual = self._model.observe(self._prev_scene, self._last_key, scene, level_up)
             self._model.record_prediction(self._last_predicted, actual)
             self._seen_effects.add(actual.kind)
+            # "Ainda estou descobrindo?" = efeito util OU chave inedita. Enquanto for
+            # verdade, o early-exit por fracao de budget nao dispara.
+            if actual.kind != "none" or self._last_key not in self._tried_keys:
+                self._last_discovery = self.action_counter
+            self._tried_keys.add(self._last_key)
             if self._last_feature is not None:
                 self._prior.observe(self._last_feature, actual.kind)
             if level_up:
@@ -442,6 +514,8 @@ class CausalObjectAgent(Agent):
                 self._reward_fn = None       # re-sintetiza grounded pro novo layout
                 self._reward_src = None
                 self._reward_defer = 0
+                self._grounded_defer = 0
+                self._reward_upgradable = False
                 self._reached_ids.clear()   # novo nivel → alvos resetam
                 win_scene = parse(wg, hud_mask=self._hud.mask())
                 self._novelty.record_goal_anchor(state_signature(win_scene))
@@ -555,8 +629,8 @@ class CausalObjectAgent(Agent):
             self._since_type = 0
         # Grounded reward pra TODOS os jogos: sintetiza SEM LLM (calculada por heuristica).
         # Jogos de teclado tambem ganham reward grounded (manhattan, multi-align, pattern).
-        if self._grounded and self._reward_fn is None:
-            self._try_learn_reward(scene)
+        if self._grounded:
+            self._grounded_reward_step(scene, has_keyboard)
         cand = None
         layer = None        # telemetria: camada que decidiu (preenchida nos sites abaixo)
         # (-1) Sweep de tipos: garante que cada TIPO de ação é testado 1x.
@@ -1224,6 +1298,25 @@ class CausalObjectAgent(Agent):
             'Responda SÓ JSON {"type":"code","source":"def reward_function(state): ..."}'
         )
 
+    def _grounded_reward_step(self, scene, has_keyboard: bool) -> None:
+        """Sintese grounded (sem LLM). Jogo de teclado sem avatar aprendido: espera ate
+        GROUNDED_DEFER_MAX acoes antes de congelar um fallback. Se o fallback foi
+        congelado e o avatar aparece depois, re-sintetiza 1x (upgrade p/ -dist)."""
+        avatar_known = self._move.avatar_id() is not None
+        if self._reward_fn is None:
+            if has_keyboard and not avatar_known and self._grounded_defer < GROUNDED_DEFER_MAX:
+                self._grounded_defer += 1
+                return
+            self._try_learn_reward(scene)
+            src = self._reward_src or ""
+            self._reward_upgradable = (has_keyboard and not avatar_known
+                                       and src.startswith(_REWARD_FALLBACK_PREFIXES))
+            return
+        if self._reward_upgradable and avatar_known:
+            self._reward_upgradable = False
+            self._reward_fn, self._reward_src = None, None
+            self._try_learn_reward(scene)
+
     def _should_learn_reward(self) -> bool:
         """Gate: só sintetiza a reward quando o avatar já foi aprendido (grounding entra no
         prompt) OU após REWARD_DEFER_MAX ticks (deadline p/ jogos sem avatar/clique)."""
@@ -1301,13 +1394,23 @@ class CausalObjectAgent(Agent):
                 return True
             aid = self._move.avatar_id()
             objs = list(scene.objects)
-            avatar_idx = next((i for i, o in enumerate(objs[:8]) if o.id == aid), None)
+            bg = _background_colors(scene)
+            # TODOS os objetos (nao so 8: em ls20 o avatar e o 10o na ordem de varredura)
+            # e nunca a outra parte do avatar composto como alvo.
+            avatar_idx = next((i for i, o in enumerate(objs) if o.id == aid), None)
+            # Avatar da COR DO FUNDO e artefato de percepcao (buraco no fundo que
+            # "se move"), nao um avatar: cai para as rewards de alinhamento/padrao.
+            if avatar_idx is not None and objs[avatar_idx].color in bg:
+                avatar_idx = None
             if avatar_idx is not None:
-                tidx = _pick_target(scene.objects, avatar_idx)
+                tidx = _pick_target(scene.objects, avatar_idx, limit=None,
+                                    exclude_ids=self._move.avatar_parts(), bg_colors=bg)
                 if tidx is not None:
-                    ac, tc = objs[avatar_idx].color, objs[tidx].color
-                    self._reward_fn = grounded_reward_fn(ac, tc)
-                    self._reward_src = f"grounded:-dist(cor{ac}->cor{tc})"
+                    av, tg = objs[avatar_idx], objs[tidx]
+                    ac, tc = av.color, tg.color
+                    self._reward_fn = grounded_reward_fn(ac, tc, avatar_size=av.size,
+                                                         target_size=tg.size)
+                    self._reward_src = f"grounded:-dist(cor{ac}#{av.size}->cor{tc}#{tg.size})"
                     return True
             # sem avatar claro (classe ALINHAMENTO: sokoban/manipulacao) -> reward
             # multi-objeto por cor (marcador<->alvo), excluindo HUD/parede grandes.

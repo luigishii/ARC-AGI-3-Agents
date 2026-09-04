@@ -142,17 +142,21 @@ def _blind_budget_agent(monkeypatch, **env):
 
 
 def test_budget_follows_inferred_class_keyboard(monkeypatch):
+    # 150 -> 200: medido nos 25 jogos em modo cego, budget apertado custou metade do
+    # score (2 niveis com budget por-jogo/classe vs 4 niveis com 200 para todos).
     a = _blind_budget_agent(monkeypatch)
     a._llm = _Fake(_CLASS_JSON)                     # cls A (navegacao)
     a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION1, GameAction.ACTION2]))
-    assert a.MAX_ACTIONS == 150
+    assert a.MAX_ACTIONS == 200
 
 
 def test_budget_follows_inferred_class_click_only(monkeypatch):
+    # 80 vinha de "L0 resolve em 5-13 acoes", que e o baseline OTIMO e nao o custo do
+    # nosso explorador: o tn36 (click) cruzou na acao 88 e o lf52 so cruza com folga.
     a = _blind_budget_agent(monkeypatch)
     a._llm = _Fake('{"cls":"C","avatar":null,"target":null,"click":[9],"hud_rows":[],"hud_cols":[]}')
     a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION6]))
-    assert a.MAX_ACTIONS == 80
+    assert a.MAX_ACTIONS == 200
 
 
 def test_budget_env_override_wins_over_class(monkeypatch):
