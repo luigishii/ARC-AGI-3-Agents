@@ -52,6 +52,9 @@ class Agent(ABC):
         self.ROOT_URL = ROOT_URL
         self.card_id = card_id
         self.game_id = game_id
+        # Sinal cooperativo do Swarm (timeout por-jogo): o loop principal sai no
+        # proximo passo em vez de continuar rodando como daemon junto do proximo jogo.
+        self.stop_requested = False
         self.guid = ""
         self.agent_name = agent_name
         self.tags = tags or []
@@ -70,7 +73,8 @@ class Agent(ABC):
         """The main agent loop. Play the game_id until finished, then exits."""
         self.timer = time.time()
         while (
-            not self.is_done(self.frames, self.frames[-1])
+            not self.stop_requested
+            and not self.is_done(self.frames, self.frames[-1])
             and self.action_counter <= self.MAX_ACTIONS
         ):
             action = self.choose_action(

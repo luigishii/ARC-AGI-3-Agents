@@ -96,3 +96,22 @@ def test_direct_click_cell(monkeypatch):
     act = a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION6]))
     assert act is not None
     assert a.phase2_stats()["direct_calls"] == 1
+
+
+def _grid64(color=9, r0=20, c0=40):
+    g = [[0] * 64 for _ in range(64)]
+    for r in range(r0, r0 + 3):
+        for c in range(c0, c0 + 3):
+            g[r][c] = color
+    return [g]
+
+
+def test_direct_click_cell_maps_to_clickmap_candidate(monkeypatch):
+    a = _agent(monkeypatch, CAUSAL_DIRECT="1", CAUSAL_CLICKMAP="1")
+    # objeto em (row 21, col 41) -> cell_of(41,21) = (3,1)
+    a._llm = _Fake('{"type":"click_cell","gx":3,"gy":1}')
+    act = a.choose_action([], _Frame(_grid64(), available=[GameAction.ACTION6]))
+    assert act.name == "ACTION6"
+    assert a.phase2_stats()["direct_hits"] == 1
+    d = act.action_data
+    assert (d.x, d.y) == (41, 21)

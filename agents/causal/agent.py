@@ -10,7 +10,7 @@ from agents.agent import Agent
 from .causal_model import CausalModel
 from .instrumentation import Instrumentation
 from .perception import match_objects, parse, to_grid, win_grid
-from .policy import Policy, candidates
+from .policy import Policy, candidates, cell_of
 from .hud import HudMask
 from .novelty import NoveltyModel, state_signature
 from .transfer import shared_prior, abstract_feature, load_shared_once, DEFAULT_PRIOR_PATH
@@ -18,7 +18,8 @@ from .planning import TransitionModel, plan
 from .navigate import MovementModel, navigate
 from .perception_strategy import PerceptionStrategy
 from .llm import (shared_llm_client, build_prompt, build_direct_prompt,
-                  parse_goal, execute_goal, client_kind)
+                  build_class_prompt, parse_class, parse_goal, execute_goal,
+                  client_kind)
 from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
@@ -194,7 +195,17 @@ class CausalObjectAgent(Agent):
                 type(self).MAX_ACTIONS,
             )
         # Game knowledge: prior decodificado das mecanicas (docs/GAMES.md).
-        self._gk = _game_knowledge(getattr(self, "game_id", ""))
+        # CAUSAL_GK=0 = "modo cego": ignora a tabela por-jogo -> simula a eval privada
+        # (jogos nao-vistos); e o run que mede o que de fato transfere.
+        gk_on = os.environ.get("CAUSAL_GK", "1") != "0"
+        self._gk = _game_knowledge(getattr(self, "game_id", "")) if gk_on else {}
+        self._gk_src = f"table:{self._gk.get('cls', '?')}" if self._gk else None
+        # Inferencia de CLASSE via LLM (1 chamada/jogo) quando a tabela nao conhece o
+        # jogo: preenche os mesmos slots (cls/avatar/target/click/hud). Nao espera o
+        # LLM_DEFER (precisa agir cedo: click-only tem budget de 80).
+        self._class_on = os.environ.get("CAUSAL_CLASS", "0") != "0"
+        self._class_at = int(os.environ.get("CAUSAL_CLASS_AT", "8"))
+        self._class_done = False
         self._model = CausalModel()
         self._novelty = NoveltyModel()
         self._tmodel = TransitionModel()
@@ -237,12 +248,7 @@ class CausalObjectAgent(Agent):
         self._hud = HudMask()
         # Game knowledge: seedar HUD mask com linhas/colunas conhecidas (frame 0).
         # Evita clicar na barra de budget nos primeiros 5 frames.
-        for r in self._gk.get("hud_rows", []):
-            self._hud.row_count[r] = HudMask._SEED
-        for c in self._gk.get("hud_cols", []):
-            self._hud.col_count[c] = HudMask._SEED
-        if any(self._hud.row_count > 0) or any(self._hud.col_count > 0):
-            self._hud.total = HudMask._SEED
+        self._seed_hud(self._gk)
         self._prev_grid = None
         self._percept = PerceptionStrategy()
         # Fase-2: exploração por erro de ontologia (η) + world-model fatorado por tipo (f_τ)
@@ -484,6 +490,7 @@ class CausalObjectAgent(Agent):
         if self.MAX_ACTIONS not in (0, float("inf")):
             budget_frac = max(0.0, 1 - self.action_counter / self.MAX_ACTIONS)
         avail = latest_frame.available_actions or [GameAction.ACTION1]
+        self._maybe_infer_class(scene, avail)
         cands = candidates(scene, avail, clickmap=self._clickmap,
                            click_colors=self._gk.get("click"))
         keymap = {c.key: c for c in cands}
@@ -815,6 +822,34 @@ class CausalObjectAgent(Agent):
                 self._iw_goal_hits += 1
         return r
 
+    def _seed_hud(self, gk) -> None:
+        for r in gk.get("hud_rows", []):
+            self._hud.row_count[r] = HudMask._SEED
+        for c in gk.get("hud_cols", []):
+            self._hud.col_count[c] = HudMask._SEED
+        if any(self._hud.row_count > 0) or any(self._hud.col_count > 0):
+            self._hud.total = HudMask._SEED
+
+    def _maybe_infer_class(self, scene, avail) -> None:
+        """1 chamada de LLM por jogo desconhecido: classifica (A-F) e nomeia papeis.
+        Resposta invalida -> desiste (sem retry; nao queima o orcamento de chamadas).
+        Exception-safe."""
+        if (self._class_done or not self._class_on or not self._llm_on
+                or self._gk or self.action_counter < self._class_at):
+            return
+        self._class_done = True
+        self._llm_calls += 1
+        try:
+            dyn = {"available": [str(a) for a in avail]}
+            info = parse_class(self._llm.complete(build_class_prompt(scene, dyn)))
+        except Exception:
+            info = None
+        if info is None:
+            return
+        self._gk = info
+        self._gk_src = f"llm:{info['cls']}"
+        self._seed_hud(info)
+
     def _direct_decide(self, scene, avail, keymap, moves):
         """Score-max Lever #2: consulta o LLM pela PROXIMA acao imediata (esparso via
         cooldown), valida contra keymap (available-guard) e devolve o candidato. Miss ou
@@ -845,6 +880,19 @@ class CausalObjectAgent(Agent):
         except Exception:
             return None
         cand = keymap.get(key) if key is not None else None
+        if cand is None and key is not None and key.startswith("ACTION6@cell="):
+            # Sob clickmap as chaves sao por-objeto (ACTION6@c9s0@gx,gy); mapeia a celula
+            # pedida pro candidato de clique que cai nela (prefere objeto, menor primeiro).
+            try:
+                gx, gy = (int(v) for v in key.split("=", 1)[1].split(","))
+            except ValueError:
+                gx = gy = None
+            if gx is not None:
+                hits = [c for c in keymap.values()
+                        if c.x is not None and c.key.startswith("ACTION6")
+                        and cell_of(c.x, c.y) == (gx, gy)]
+                if hits:
+                    cand = min(hits, key=lambda c: (not c.has_object, c.obj_size))
         if cand is not None:
             self._direct_hits += 1
         return cand
@@ -1222,6 +1270,7 @@ class CausalObjectAgent(Agent):
             "rprog_fires": self._rprog_fires,
             "direct_calls": self._direct_calls,
             "direct_hits": self._direct_hits,
+            "gk_src": self._gk_src,
             "eta_rows": len(self._etable.rows),
             "productive_colors": sorted(self._productive_colors),
             "stale_count": self._stale_count,

@@ -139,6 +139,10 @@ class Swarm:
                 t.join(timeout=game_timeout)
                 if t.is_alive():
                     logger.warning(f"!!! TIMEOUT {a.game_id} after {game_timeout}s")
+                    # Pede parada cooperativa: sem isso a thread daemon continuava
+                    # jogando (e chamando o LLM) em paralelo com o proximo jogo.
+                    a.stop_requested = True
+                    t.join(timeout=game_timeout)
                 elapsed = time.time() - t0
                 levels = getattr(a, "levels_completed", 0)
                 acts = getattr(a, "action_counter", 0)

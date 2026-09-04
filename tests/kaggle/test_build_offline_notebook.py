@@ -115,3 +115,21 @@ def test_offline_env_has_fix():
 def test_offline_env_has_direct():
     import kaggle.build_offline_notebook as b
     assert "CAUSAL_DIRECT=1" in b.OFFLINE_ENV
+
+
+def test_offline_model_path_discovered_by_glob():
+    _, cell1 = _run_cell()
+    assert "config.json" in cell1
+    assert "QWEN_MODEL_PATH=" in cell1
+
+
+def test_offline_env_timeout_and_class():
+    bn = _load()
+    assert "SWARM_GAME_TIMEOUT=600\n" in bn.OFFLINE_ENV
+    assert "CAUSAL_CLASS=1\n" in bn.OFFLINE_ENV
+
+
+def test_offline_gk_toggle_editable_in_cell():
+    _, cell1 = _run_cell()
+    assert "CAUSAL_GK = " in cell1                     # >>> EDITE AQUI <<< modo cego
+    assert "CAUSAL_GK=" in cell1                       # gravado no .env

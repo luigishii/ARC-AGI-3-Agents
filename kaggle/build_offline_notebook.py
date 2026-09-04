@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # torna build_notebook importavel
 from build_notebook import (  # noqa: E402
-    WHEELS, REPO, COMP_REPO, TRIMMED_INIT, MODEL_DATASET_PATH,
+    WHEELS, REPO, COMP_REPO, TRIMMED_INIT, MODEL_DATASET_PATH, MODEL_DISCOVERY,
     KERNELS_WHEELS, HF_CACHE_HOME,
     read_sources, _cell, _repo_root,
 )
@@ -36,6 +36,8 @@ OFFLINE_ENV = (
     "CAUSAL_FIX=1\n"        # guarda global anti-fixacao
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
     "CAUSAL_DIRECT_COOLDOWN=20\n"  # cooldown entre chamadas direct (default 2 -> 20)
+    "CAUSAL_CLASS=1\n"      # 1 chamada/jogo: LLM classifica o jogo (A-F) + papeis
+    "SWARM_GAME_TIMEOUT=600\n"  # gpt-oss ~30s/chamada: 120s estourava no meio e sobrepunha jogos
     "CAUSAL_EFFORT=medium\n"  # gpt-oss: esforco de raciocinio (low|medium|high) no Harmony
     "HF_HUB_OFFLINE=1\n"       # kernels/hub sem rede: le so o cache local
     "TRANSFORMERS_OFFLINE=1\n"
@@ -47,6 +49,9 @@ OFFLINE_ENV = (
 # 61GB a cada troca e TRAVA), roda UMA chamada de main.py sem --game → o modelo é singleton
 # por processo, carrega 1x e joga o subconjunto OFFLINE_GAMES no MESMO processo.
 OFFLINE_GAMES = ""   # "" = TODOS os 25; ex: "vc33,ls20" (prefixos)
+# "1" = usa a tabela _GAME_KNOWLEDGE (mecanica dos 25 publicos). "0" = MODO CEGO: ignora a
+# tabela (so heuristicas genericas + classe inferida pelo LLM) = o que a eval privada ve.
+CAUSAL_GK = "1"
 
 
 def build_offline_notebook(sources):
@@ -113,8 +118,14 @@ def build_offline_notebook(sources):
         "# >>> EDITE AQUI: quais jogos rodar. '' = TODOS os 25. Ex: 'vc33,ls20,tn36' <<<\n"
         "# O 32B carrega UMA vez e joga o subconjunto no MESMO processo (sem reload/trava).\n"
         f"OFFLINE_GAMES = {OFFLINE_GAMES!r}\n"
-        f"with open({REPO!r} + '/.env', 'a') as f:\n"
+        "# >>> EDITE AQUI: '1' = tabela de mecanicas dos 25 publicos; '0' = MODO CEGO"
+        " (= eval privada) <<<\n"
+        f"CAUSAL_GK = {CAUSAL_GK!r}\n"
+        + MODEL_DISCOVERY
+        + f"with open({REPO!r} + '/.env', 'a') as f:\n"
         "    f.write('OFFLINE_GAMES=' + OFFLINE_GAMES + '\\n')\n"
+        "    f.write('CAUSAL_GK=' + CAUSAL_GK + '\\n')\n"
+        "    f.write('QWEN_MODEL_PATH=' + _mp + '\\n')\n"
         "print('rodando OFFLINE_GAMES=%r (1 processo, 32B 1x)' % OFFLINE_GAMES)\n"
         f"os.system('cd {REPO} && MPLBACKEND=agg python main.py --agent causalobject')\n"
     )

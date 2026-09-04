@@ -106,3 +106,19 @@ def test_env_has_fix():
 def test_env_has_direct():
     import kaggle.build_notebook as b
     assert "CAUSAL_DIRECT=1" in b.ENV
+
+
+def test_env_has_class_infer():
+    bn = _load_module()
+    assert "CAUSAL_CLASS=1\n" in bn.ENV
+
+
+def test_model_path_discovered_by_glob(tmp_path):
+    root, bn = _fake_repo(tmp_path)
+    nb = bn.build_notebook(bn.read_sources(root))
+    cell1 = "".join(nb["cells"][1]["source"])
+    assert "config.json" in cell1                      # glob de /kaggle/input/models
+    assert "QWEN_MODEL_PATH=" in cell1                 # escrito a partir da descoberta
+    for ln in bn.MODEL_DISCOVERY.splitlines():      # indentado dentro do `if rerun:`
+        assert ln.strip() in cell1
+    assert "gpt-oss" in bn.MODEL_DISCOVERY

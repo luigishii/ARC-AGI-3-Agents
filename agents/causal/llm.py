@@ -21,14 +21,114 @@ _INSTRUCTION = (
     'repeating an action that produced no visible change.'
 )
 
-_DIRECT_INSTRUCTION = (
-    "Choose the NEXT immediate action to make progress. "
-    "Reply with ONLY a JSON object, no markdown, no prose:\n"
-    '{"type":"press","action":"ACTIONk"}   (k from AVAILABLE list)\n'
-    '{"type":"click_cell","gx":0,"gy":0}   (gx,gy in 0..5 = 6x6 grid cell)\n'
-    "Pick the action that best progresses toward the goal. "
-    "Do NOT repeat an action that produced no visible change."
+_ACTION_RE = re.compile(r"ACTION\d")
+
+
+def _norm_actions(available) -> list:
+    """['GameAction.ACTION1', 'ACTION6'] -> ['ACTION1', 'ACTION6'] (forma que o keymap
+    indexa e que execute_goal(press) devolve)."""
+    out = []
+    for a in available or []:
+        m = _ACTION_RE.search(str(a))
+        out.append(m.group(0) if m else str(a))
+    return out
+
+
+def _direct_instruction(names) -> str:
+    """Oferta SO o formato de resposta compativel com AVAILABLE: press se ha tecla,
+    click_cell so se ACTION6 esta disponivel. Jogo de teclado nunca ve click_cell."""
+    press = [n for n in names if n != "ACTION6"]
+    lines = ["Choose the NEXT immediate action to make progress. "
+             "Reply with ONLY a JSON object, no markdown, no prose, one of:"]
+    if press:
+        lines.append('{"type":"press","action":"%s"}   (action MUST be one of '
+                     'AVAILABLE_ACTIONS)' % press[0])
+    if "ACTION6" in names:
+        lines.append('{"type":"click_cell","gx":0,"gy":0}   (gx,gy in 0..5 = 6x6 grid cell)')
+    lines.append("Pick the action that best progresses toward the goal. "
+                 "Do NOT repeat an action that produced no visible change.")
+    return "\n".join(lines)
+
+
+# Taxonomia das 6 classes de mecanica (docs/GAMES.md) — prior generalizavel pra
+# jogo NAO-visto: o LLM classifica o jogo e nomeia os papeis (avatar/alvo/clicaveis/HUD),
+# preenchendo os mesmos slots que a tabela _GAME_KNOWLEDGE preenche nos jogos publicos.
+_CLASS_TAXONOMY = (
+    "Known puzzle classes (every ARC-AGI-3 game falls in one):\n"
+    "A. Navigation: a keyboard-moved avatar must reach a target position "
+    "(sometimes matching shape/color/rotation).\n"
+    "B. Sokoban: push/carry boxes onto target cells (click selects, arrows push, "
+    "ACTION5 may grab/release).\n"
+    "C. Piece manipulation: select (click) then move/rotate pieces so they cover/"
+    "connect/align with targets; gravity may apply.\n"
+    "D. Painting/pattern fill: paint or toggle cells (lights-out style) until the "
+    "grid matches a target pattern.\n"
+    "E. Sequence/program + VALIDATE: arrange tokens/instructions in order, then a RUN/"
+    "validate action (ACTION5 or a run button) checks the result; ACTION7 is undo.\n"
+    "F. Flow routing: place bars/deflectors so falling water fills all buckets.\n"
+    "Universal facts: a thin bar on row 0/63 or column 62/63 is the move BUDGET (HUD), "
+    "never the goal; only specific sprite colors are clickable; the win condition is "
+    "always spatial (positions/pattern), never a color count."
 )
+
+_CLASS_INSTRUCTION = (
+    "Classify this game and name the roles. Reply with ONLY a JSON object, no markdown, "
+    "no prose:\n"
+    '{"cls":"A","avatar":9,"target":5,"click":[9,1],"hud_rows":[63],"hud_cols":[]}\n'
+    "cls: one letter A-F. avatar: color (0-15) of the object moved by keyboard actions, "
+    "or null. target: color of the goal object/position, or null. click: list of colors "
+    "worth clicking (interactive sprites), or null if no click action. hud_rows/hud_cols: "
+    "grid rows/columns (0-63) that are the budget bar, [] if none."
+)
+
+
+def build_class_prompt(scene, dyn) -> str:
+    """Prompt de inferencia de CLASSE (1 chamada por jogo): taxonomia A-F + grid ASCII +
+    objetos + available. Saida via parse_class -> dict no formato de _GAME_KNOWLEDGE."""
+    names = _norm_actions((dyn or {}).get("available", []))
+    lines = [_CLASS_TAXONOMY, "",
+             "GRID (16x16 downsampled, 1 char = color 0-f):",
+             grid_to_ascii_compact(getattr(scene, "grid", None)),
+             f"OBJECTS ({len(scene.objects)}):"]
+    for o in list(scene.objects)[:12]:
+        lines.append(
+            f"  id={o.id} color={o.color} pos=({int(round(o.centroid[1]))},{int(round(o.centroid[0]))}) "
+            f"size={o.size}"
+        )
+    lines.append(f"AVAILABLE_ACTIONS: {names}")
+    lines.append(_CLASS_INSTRUCTION)
+    return "\n".join(lines)
+
+
+def _color_or_none(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 15 else None
+
+
+def _int_list(v, hi):
+    if not isinstance(v, list):
+        return []
+    return [x for x in v if isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= hi]
+
+
+def parse_class(text):
+    """JSON do LLM -> dict {cls, avatar, target, click(set|None), hud_rows, hud_cols}
+    ou None (classe invalida / sem JSON). Valores fora do dominio viram None/descartados."""
+    g = _extract_json(text)
+    if not isinstance(g, dict):
+        return None
+    cls = g.get("cls")
+    if not (isinstance(cls, str) and len(cls) == 1 and cls in "ABCDEF"):
+        return None
+    click = g.get("click")
+    click_set = set(_int_list(click, 15)) if isinstance(click, list) else None
+    return {
+        "cls": cls,
+        "avatar": _color_or_none(g.get("avatar")),
+        "target": _color_or_none(g.get("target")),
+        "click": click_set,
+        "hud_rows": _int_list(g.get("hud_rows"), 63),
+        "hud_cols": _int_list(g.get("hud_cols"), 63),
+    }
 
 
 _HARMONY_TOKEN = re.compile(r"<\|[^|>]*\|>")
@@ -247,13 +347,14 @@ _FEWSHOT = (
 
 def build_prompt(scene, dynamics) -> str:
     dyn = dynamics or {}
+    names = _norm_actions(dyn.get("available", []))
     lines = [f"OBJECTS ({len(scene.objects)}):"]
     for o in scene.objects:
         lines.append(
             f"  id={o.id} color={o.color} centroid={o.centroid} "
             f"size={o.size} bbox={o.bbox}"
         )
-    lines.append(f"AVAILABLE_ACTIONS: {dyn.get('available', [])}   (use ONLY these)")
+    lines.append(f"AVAILABLE_ACTIONS: {names}   (answer with ONE action ONLY from this list)")
     lines.append(f"DYNAMICS: moves={dyn.get('moves', {})} notes={dyn.get('notes', '')}")
     lines.append(_FEWSHOT)
     lines.append(_INSTRUCTION)
@@ -300,6 +401,7 @@ def build_direct_prompt(scene, dyn, last=None, context=None) -> str:
     Tudo em ingles (melhor pra Qwen3-32B)."""
     dyn = dyn or {}
     ctx = context or {}
+    names = _norm_actions(dyn.get("available", []))
     lines = ["GRID (16x16 downsampled, 1 char = color 0-f):",
              grid_to_ascii_compact(getattr(scene, "grid", None)),
              f"OBJECTS ({len(scene.objects)}):"]
@@ -308,7 +410,7 @@ def build_direct_prompt(scene, dyn, last=None, context=None) -> str:
             f"  id={o.id} color={o.color} pos=({int(round(o.centroid[1]))},{int(round(o.centroid[0]))}) "
             f"size={o.size}"
         )
-    lines.append(f"AVAILABLE_ACTIONS: {dyn.get('available', [])}   (use ONLY these)")
+    lines.append(f"AVAILABLE_ACTIONS: {names}   (answer with ONE action ONLY from this list)")
     if ctx:
         lines.append(f"STATE: step #{ctx.get('step', '?')}, "
                      f"levels_done={ctx.get('levels', 0)}, "
@@ -326,7 +428,7 @@ def build_direct_prompt(scene, dyn, last=None, context=None) -> str:
             f"Last action {last['key']} produced: {eff}. Choose the NEXT "
             "action that makes PROGRESS; do NOT repeat actions with no effect."
         )
-    lines.append(_DIRECT_INSTRUCTION)
+    lines.append(_direct_instruction(names))
     return "\n".join(lines)
 
 

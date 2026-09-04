@@ -22,6 +22,25 @@ MODULES = [
 # automaticamente (llm._should_use_harmony): chat template de raciocinio + canal final.
 MODEL_DATASET_PATH = "/kaggle/input/models/danielhanchen/gpt-oss-120b/transformers/default/1"
 
+# Descoberta do path REAL dos pesos em runtime (o slug do Kaggle Models varia por
+# owner/variation/version: ex. openai/gpt-oss-120b/transformers/gpt-oss-120b/1).
+# Se MODEL_DATASET_PATH nao existe, procura config.json com "gpt-oss" no path e usa o
+# mais raso. Sem isso o HFClient falha e o run cai SILENCIOSAMENTE pro NullLLMClient.
+# A linha QWEN_MODEL_PATH gravada por ultimo no .env VENCE a do ENV (dotenv: last wins).
+MODEL_DISCOVERY = (
+    "import glob as _mg, os as _mo\n"
+    f"_mp = {MODEL_DATASET_PATH!r}\n"
+    "if not _mo.path.isdir(_mp):\n"
+    "    _cf = [p for p in _mg.glob('/kaggle/input/models/**/config.json', recursive=True)\n"
+    "           if 'gpt-oss' in p.lower()]\n"
+    "    _cf += [p for p in _mg.glob('/kaggle/input/**/config.json', recursive=True)\n"
+    "            if 'gpt-oss' in p.lower() and p not in _cf]\n"
+    "    if _cf:\n"
+    "        _mp = _mo.path.dirname(sorted(_cf, key=lambda p: (p.count('/'), p))[0])\n"
+    "print('QWEN_MODEL_PATH ->', _mp, '(OK)' if _mo.path.isdir(_mp) else "
+    "'(NAO EXISTE: LLM vai cair pro NullLLMClient)')\n"
+)
+
 # gpt-oss MXFP4: os kernels vem da lib HF `kernels` + o repo kernels-community/triton_kernels
 # (torch-universal, ~536KB). Air-gapped: com internet ON o usuario faz
 #   pip download kernels huggingface_hub -d ./offline_wheels
@@ -60,6 +79,7 @@ ENV = (
     "CAUSAL_GROUNDED=1\n"       # exploração por cobertura + anti-fixação
     "CAUSAL_FIX=1\n"        # guarda global anti-fixação
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
+    "CAUSAL_CLASS=1\n"      # 1 chamada/jogo: LLM classifica o jogo (A-F) + papeis (jogo nao-visto)
     "CAUSAL_EFFORT=medium\n"  # gpt-oss: esforco de raciocinio (low|medium|high) no Harmony
     "HF_HUB_OFFLINE=1\n"       # kernels/hub sem rede: le so o cache local
     "TRANSFORMERS_OFFLINE=1\n"
@@ -112,6 +132,9 @@ def build_notebook(sources):
         f"        f.write({TRIMMED_INIT!r})\n"
         f"    with open({REPO!r} + '/.env', 'w') as f:\n"
         f"        f.write({ENV!r})\n"
+        + "".join("    " + ln + "\n" for ln in MODEL_DISCOVERY.splitlines())
+        + f"    with open({REPO!r} + '/.env', 'a') as f:\n"
+        "        f.write('QWEN_MODEL_PATH=' + _mp + '\\n')\n"
         f"    os.system('cd {REPO} && MPLBACKEND=agg python main.py --agent causalobject')\n"
     )
     cell2 = (
