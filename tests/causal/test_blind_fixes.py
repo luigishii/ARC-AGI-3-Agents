@@ -11,6 +11,8 @@ Evidencia que motivou cada teste:
 from types import SimpleNamespace as NS
 
 from agents.causal.agent import (
+    CYCLE_MAX_KEYS,
+    CYCLE_WINDOW,
     DISCOVERY_PATIENCE,
     MIN_SWEEP_ACTIONS,
     UNKNOWN_BUDGET,
@@ -115,3 +117,103 @@ def test_exit_agressivo_espera_uma_varredura():
     assert a.is_done([], _frame()) is False
     a.action_counter = MIN_SWEEP_ACTIONS
     assert a.is_done([], _frame()) is True
+
+
+# ------------------------------------------------- D: ciclo curto pos-level-up
+def _fix_agent(monkeypatch, **env):
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    a = CausalObjectAgent.__new__(CausalObjectAgent)
+    a.action_counter = 0
+    a.MAX_ACTIONS = 200
+    a._init_causal_state()
+    return a
+
+
+def test_antifix_quebra_ciclo_de_4_chaves(monkeypatch):
+    """vc33 cruzou o L1 na acao 37 e gastou 119 das 164 acoes restantes girando
+    entre 4 botoes (c9s2 nas celulas 0,1..0,4). Repeticao (AAA) e oscilacao (ABAB)
+    nao pegam um ciclo de periodo 4."""
+    from agents.causal.policy import Candidate
+    a = _fix_agent(monkeypatch, CAUSAL_FIX="1")
+    cands = [Candidate(None, None, None, k, False) for k in ("A", "B", "C", "D", "E")]
+    km = {c.key: c for c in cands}
+    out = None
+    for i in range(CYCLE_WINDOW):
+        k = "ABCD"[i % 4]
+        out = a._antifix(km[k], cands, km)
+    assert out.key == "E", out.key      # forcado para fora do ciclo
+    assert a._fix_breaks >= 1
+
+
+def test_alvo_nunca_indistinguivel_do_avatar():
+    """ka59 saiu com -dist(cor14#8->cor14#8): mesma cor E mesmo tamanho, entao a
+    reward ancora no MESMO objeto dos dois lados -> distancia 0 sempre ->
+    goal_flag True em 185 de 198 estados reais."""
+    objs = [
+        _obj(14, 8, (0, 0, 2, 3), (1, 1)),        # 0 avatar
+        _obj(14, 8, (20, 20, 22, 23), (21, 21)),  # 1 gemeo: indistinguivel
+        _obj(7, 6, (40, 40, 42, 42), (41, 41)),   # 2 alvo utilizavel
+        _obj(3, 900, (0, 0, 40, 40), (25, 25)),   # 3 fundo
+    ]
+    bg = _background_colors(NS(objects=objs))
+    t = _pick_target(objs, 0, limit=None, bg_colors=bg)
+    assert t is not None
+    assert not (objs[t].color == 14 and objs[t].size == 8)
+
+
+def test_alvo_nao_e_estrutura_gigante():
+    """m0r0 mirava um objeto de 1294px (49% da area): metade do tabuleiro, nao alvo.
+    O piso pegava ruido embaixo; faltava teto em cima."""
+    objs = [
+        _obj(10, 25, (0, 0, 4, 4), (2, 2)),          # 0 avatar (marcador)
+        _obj(12, 1299, (10, 0, 40, 40), (25, 20)),   # 1 metade do tabuleiro
+        _obj(11, 1294, (10, 41, 40, 63), (25, 50)),  # 2 outra metade  <- era escolhido
+        _obj(10, 25, (50, 50, 54, 54), (52, 52)),    # 3 marcador irmao
+    ]
+    bg = _background_colors(NS(objects=objs))
+    t = _pick_target(objs, 0, limit=None, bg_colors=bg)
+    assert t is not None and objs[t].size <= 25
+
+
+def test_sem_alvo_quando_so_sobra_estrutura():
+    """m0r0 e um jogo de espelho: os dois marcadores co-movem, entao o irmao sai como
+    parte do avatar e sobram so as duas metades do tabuleiro (49% da area cada).
+    Melhor ficar SEM reward de navegacao do que mirar a estrutura."""
+    objs = [
+        _obj(10, 25, (0, 0, 4, 4), (2, 2)),          # 0 avatar
+        _obj(12, 1299, (10, 0, 40, 40), (25, 20)),   # 1 metade do tabuleiro
+        _obj(11, 1294, (10, 41, 40, 63), (25, 50)),  # 2 outra metade
+        _obj(10, 25, (50, 50, 54, 54), (52, 52)),    # 3 irmao co-movido
+    ]
+    objs[3].id = 77
+    bg = _background_colors(NS(objects=objs))
+    assert _pick_target(objs, 0, limit=None, exclude_ids={77}, bg_colors=bg) is None
+
+
+def test_accept_reward_fn_rejeita_falso_positivo():
+    """A trava comportamental existe mas so era aplicada na reward do LLM."""
+    from agents.causal.goals import accept_reward_fn
+    estados = [
+        [("h", {"x": 1, "y": 1, "color": 4, "size": 3})],
+        [("h", {"x": 9, "y": 9, "color": 4, "size": 3})],
+        [("h", {"x": 5, "y": 2, "color": 4, "size": 3})],
+    ]
+    ok, motivo = accept_reward_fn(lambda st: (0.0, True), estados)
+    assert ok is False and "falso-positivo" in motivo
+    ok2, _ = accept_reward_fn(lambda st: (-float(st[0][1]["x"]), False), estados)
+    assert ok2 is True
+
+
+def test_antifix_nao_quebra_com_variedade(monkeypatch):
+    """Janela cheia mas com mais de CYCLE_MAX_KEYS chaves distintas = exploracao
+    saudavel, nao ciclo: nao deve sobrepor."""
+    from agents.causal.policy import Candidate
+    a = _fix_agent(monkeypatch, CAUSAL_FIX="1")
+    keys = [f"K{i}" for i in range(CYCLE_MAX_KEYS + 2)]
+    cands = [Candidate(None, None, None, k, False) for k in keys]
+    km = {c.key: c for c in cands}
+    for i in range(CYCLE_WINDOW):
+        out = a._antifix(km[keys[i % len(keys)]], cands, km)
+    assert a._fix_breaks == 0
+    assert out.key in keys

@@ -233,11 +233,22 @@ def grounded_diversity_reward_fn(max_size=64):
 
 
 def accept_reward(source, sample_states, min_states=3):
-    """Aceitação COMPORTAMENTAL da reward: avalia em estados reais e rejeita patológicas.
-    Retorna (aceito, motivo). Cold-start: < min_states estados -> aceita (bootstrap)."""
+    """Aceitação COMPORTAMENTAL da reward vinda do LLM (código-fonte).
+    Retorna (aceito, motivo)."""
     fn = compile_reward(source)
     if fn is None:
         return (False, "não compila")
+    return accept_reward_fn(fn, sample_states, min_states)
+
+
+def accept_reward_fn(fn, sample_states, min_states=3):
+    """Mesma aceitação, sobre uma reward já CALLABLE. Existe para que a reward
+    grounded (calculada, não sintetizada pelo LLM) passe pela mesma trava: sem isso o
+    ka59 adotou -dist(cor14#8->cor14#8), que ancora no mesmo objeto dos dois lados e
+    dá goal_flag=True em 185 de 198 estados reais.
+    Cold-start: < min_states estados -> aceita (bootstrap)."""
+    if fn is None:
+        return (False, "sem função")
     if len(sample_states) < min_states:
         return (True, "poucos estados p/ julgar (cold-start)")
     vals, flags = [], []

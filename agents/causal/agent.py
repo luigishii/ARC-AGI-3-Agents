@@ -26,7 +26,7 @@ from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
 from .iw import iw_plan
 from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
-                    value_fn_from_reward, accept_reward, grounded_reward_fn,
+                    value_fn_from_reward, accept_reward, accept_reward_fn, grounded_reward_fn,
                     grounded_multi_reward_fn, grounded_pattern_reward_fn,
                     grounded_pair_reward_fn, grounded_template_reward_fn,
                     grounded_diversity_reward_fn, grounded_count_reward_fn)
@@ -84,11 +84,21 @@ DISCOVERY_PATIENCE = 25
 MIN_SWEEP_ACTIONS = 40
 # Objeto menor que isso e ruido de percepcao (buraco no fundo), nunca alvo.
 MIN_TARGET_SIZE = 4
+# ... e objeto acima desta fracao da area percebida e ESTRUTURA, nunca alvo (medido:
+# m0r0 mirava uma metade do tabuleiro com 49% da area; alvo legitimo maior tem 14,9%).
+TARGET_MAX_SHARE = 0.25
+# ... e so conta como estrutura se tambem for grande em absoluto (o maior alvo
+# legitimo medido tem 208px; as metades do tabuleiro do m0r0 tem ~1294px).
+TARGET_MIN_STRUCT = 250
 # Cor 0 = vazio/fundo na paleta do AGI-3: nunca e avatar nem alvo.
 EMPTY_COLOR = 0
 # Fracao da area percebida acima da qual uma cor e considerada FUNDO (no ls20 a cor
 # dominante ocupa 63% do grid). Alto de proposito: so exclui fundo de verdade.
 BG_SHARE = 0.5
+# Deteccao de CICLO CURTO: se as ultimas CYCLE_WINDOW acoes usaram <= CYCLE_MAX_KEYS
+# chaves distintas, o agente esta girando em falso (nao e repeticao nem oscilacao).
+CYCLE_WINDOW = 12
+CYCLE_MAX_KEYS = 4
 
 # Conhecimento decodificado dos 25 jogos (docs/GAMES.md). Injeta priors no agente:
 # avatar_color/target_color → grounded reward + navigate sem adivinhar.
@@ -212,6 +222,28 @@ def _pick_target(objects, avatar_idx, limit=8, exclude_ids=None, bg_colors=None)
     bg = set(bg_colors or ())
     cand = [i for i in cand
             if objs[i].size >= MIN_TARGET_SIZE and objs[i].color not in bg] or cand
+    # Teto: alvo não é estrutura. No m0r0 as duas metades do tabuleiro ocupam 49% da
+    # área cada e uma delas era escolhida; os alvos reais têm 0,9%. Nos jogos medidos
+    # o maior alvo legítimo fica em 14,9% da área, daí o corte em TARGET_MAX_SHARE.
+    # Exclusão DURA (sem fallback): se só sobra estrutura, é melhor não ter reward de
+    # navegação e deixar o chamador cair em alinhamento/padrão. No m0r0 os dois
+    # marcadores co-movem, o irmão sai como parte do avatar, e um fallback aqui
+    # readmitia justamente a metade do tabuleiro.
+    # Estrutura = grande em VALOR ABSOLUTO e dominante em fração. Só a fração não
+    # serve: numa cena com 2 objetos de 1px cada um "ocupa 50% da área percebida".
+    area = sum(o.size for o in objs) or 1
+    cand = [i for i in cand
+            if not (objs[i].size > TARGET_MIN_STRUCT
+                    and objs[i].size / area > TARGET_MAX_SHARE)]
+    if not cand:
+        return None
+    # A reward ancora por (cor, tamanho): um objeto com a MESMA cor e o MESMO tamanho
+    # do avatar é indistinguível dele e a distância viraria 0 sempre (no ka59 isso deu
+    # goal_flag verdadeiro em 185 de 198 estados). Nunca serve de alvo.
+    av0 = objs[avatar_idx] if 0 <= avatar_idx < len(objs) else None
+    if av0 is not None:
+        cand = [i for i in cand
+                if not (objs[i].color == av0.color and objs[i].size == av0.size)] or cand
     color_count = {}
     for o in objs:
         color_count[o.color] = color_count.get(o.color, 0) + 1
@@ -357,7 +389,8 @@ class CausalObjectAgent(Agent):
         self._fix_breaks = 0          # diag: vezes que o guarda quebrou uma fixação
         self._fix_on = os.environ.get("CAUSAL_FIX", "0") != "0"
         self._fix_k = int(os.environ.get("CAUSAL_FIX_K", "3"))
-        self._recent_keys = deque(maxlen=6)   # ultimas 6 keys pra detectar oscilacao
+        # janela de keys recentes: 4 bastam p/ oscilacao, CYCLE_WINDOW p/ ciclo curto
+        self._recent_keys = deque(maxlen=CYCLE_WINDOW)
         # Transfer entre níveis: cores de objeto que foram produtivas (level_up)
         self._productive_colors = set()    # cores que estavam na key que causou level_up
         # Deteccao de "preso": acoes consecutivas sem mudanca de estado
@@ -1189,6 +1222,19 @@ class CausalObjectAgent(Agent):
                     cand = keymap.get(self._cover_decide(alt), cand)
                     self._fix_breaks += 1
                     self._recent_keys.clear()
+                    return cand
+        # Ciclo curto de periodo qualquer: janela cheia girando entre pouquissimas
+        # keys. Generaliza AAA/ABAB -- medido no vc33, que apos cruzar o nivel 1
+        # gastou 119 das 164 acoes restantes alternando entre 4 botoes, sem que
+        # nenhuma das duas regras acima disparasse.
+        if self._fix_on and cands and len(rk) >= CYCLE_WINDOW:
+            loop = set(rk[-CYCLE_WINDOW:])
+            if len(loop) <= CYCLE_MAX_KEYS:
+                alt = [c for c in cands if c.key not in loop]
+                if alt:
+                    cand = keymap.get(self._cover_decide(alt), cand)
+                    self._fix_breaks += 1
+                    self._recent_keys.clear()
         return cand
 
     def _eta_bonus(self, key) -> float:
@@ -1327,6 +1373,25 @@ class CausalObjectAgent(Agent):
         self._reward_defer += 1
         return False
 
+    def _grounded_states(self, scene) -> list:
+        """Estados reais recentes (buffer + cena atual) para julgar uma reward."""
+        states = [[(o.shape_hash, _obj_state(o)) for o in sc.objects]
+                  for (sc, _k, _e) in self._buffer]
+        states.append([(o.shape_hash, _obj_state(o)) for o in scene.objects])
+        return states
+
+    def _adopt_grounded(self, fn, src, scene) -> bool:
+        """Adota a reward grounded SÓ se ela passar a mesma trava comportamental da
+        reward do LLM (nada de falso-positivo nem de escalar constante). Rejeitada ->
+        segue para a próxima variante, em vez de congelar uma reward que mente.
+        Sem esta trava o ka59 adotou uma reward com goal_flag=True em 185/198 estados."""
+        ok, _reason = accept_reward_fn(fn, self._grounded_states(scene))
+        if not ok:
+            self._reward_rejected += 1
+            return False
+        self._reward_fn, self._reward_src = fn, src
+        return True
+
     def _try_learn_reward(self, scene) -> bool:
         """A: sintetiza a reward via LLM e ACEITA a 1ª que passa o check estático
         (anti-trapaça) E o comportamental (accept_reward: sem constante/sempre-True em
@@ -1408,32 +1473,33 @@ class CausalObjectAgent(Agent):
                 if tidx is not None:
                     av, tg = objs[avatar_idx], objs[tidx]
                     ac, tc = av.color, tg.color
-                    self._reward_fn = grounded_reward_fn(ac, tc, avatar_size=av.size,
-                                                         target_size=tg.size)
-                    self._reward_src = f"grounded:-dist(cor{ac}#{av.size}->cor{tc}#{tg.size})"
-                    return True
+                    fn = grounded_reward_fn(ac, tc, avatar_size=av.size,
+                                            target_size=tg.size)
+                    src = f"grounded:-dist(cor{ac}#{av.size}->cor{tc}#{tg.size})"
+                    if self._adopt_grounded(fn, src, scene):
+                        return True
             # sem avatar claro (classe ALINHAMENTO: sokoban/manipulacao) -> reward
             # multi-objeto por cor (marcador<->alvo), excluindo HUD/parede grandes.
             same = sum(1 for c in set(o.color for o in objs)
                        if sum(1 for o in objs if o.color == c and o.size <= 64) >= 2)
-            if same:
-                self._reward_fn = grounded_multi_reward_fn()
-                self._reward_src = "grounded:multi-align(same-color,small)"
+            if same and self._adopt_grounded(grounded_multi_reward_fn(),
+                                             "grounded:multi-align(same-color,small)",
+                                             scene):
                 return True
             # classe PINTURA/SEQUENCIA/FLUXO: referencia (topo) vs editavel (baixo).
             tops = sum(1 for o in objs if o.size <= 64 and o.centroid[0] < 32)
             bots = sum(1 for o in objs if o.size <= 64 and o.centroid[0] >= 32)
-            if tops and bots:
-                self._reward_fn = grounded_pattern_reward_fn()
-                self._reward_src = "grounded:pattern(topo-vs-baixo)"
+            if tops and bots and self._adopt_grounded(grounded_pattern_reward_fn(),
+                                                      "grounded:pattern(topo-vs-baixo)",
+                                                      scene):
                 return True
             # classe PARES/MIRROR (m0r0, ls20): convergencia de objetos de mesma forma
             shapes = set(o.shape_hash for o in objs if o.size <= 64)
             pair_shapes = sum(1 for s in shapes
                               if sum(1 for o in objs if o.shape_hash == s and o.size <= 64) >= 2)
-            if pair_shapes:
-                self._reward_fn = grounded_pair_reward_fn()
-                self._reward_src = "grounded:pair-converge(same-shape,small)"
+            if pair_shapes and self._adopt_grounded(
+                    grounded_pair_reward_fn(),
+                    "grounded:pair-converge(same-shape,small)", scene):
                 return True
             # grounded on mas sem estrutura util -> so cai no LLM apos o deferimento
             if self.action_counter < self._llm_defer or self._llm_calls >= self._llm_max:
