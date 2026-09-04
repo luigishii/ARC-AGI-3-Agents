@@ -198,6 +198,29 @@ def grounded_template_reward_fn(win_template):
     return reward_function
 
 
+def grounded_diversity_reward_fn(max_size=64):
+    """Reward pra jogos tipo LIGHTS-OUT (ft09) e PINTURA: maximiza a diversidade de
+    cores entre objetos pequenos. Em ft09, a meta e que cada tile tenha a cor correta
+    (padrao de vizinhos). Proxy grounded: mais cores distintas = mais perto da solucao.
+    Complementa pattern_reward com sinal local. goal_flag quando diversidade alta. Safe."""
+    def reward_function(state):
+        try:
+            colors = set()
+            n = 0
+            for _, o in state:
+                if o.get("size", 10 ** 9) <= max_size:
+                    colors.add((o.get("x", 0) // 8, o.get("y", 0) // 8, o.get("color", 0)))
+                    n += 1
+            if n == 0:
+                return (0.0, False)
+            # Quanto mais tuplas (pos_bucket, color) distintas, melhor
+            score = float(len(colors)) / max(1, n)
+            return (score, score > 0.9)
+        except Exception:
+            return (0.0, False)
+    return reward_function
+
+
 def accept_reward(source, sample_states, min_states=3):
     """Aceitação COMPORTAMENTAL da reward: avalia em estados reais e rejeita patológicas.
     Retorna (aceito, motivo). Cold-start: < min_states estados -> aceita (bootstrap)."""

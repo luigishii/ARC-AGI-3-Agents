@@ -73,10 +73,21 @@ class MovementModel:
         return m
 
 
-def navigate(scene, move, reached_ids=None):
-    """Navega o avatar ate o alvo mais proximo (cor rara, compacto).
-    reached_ids: set de object IDs ja alcancados neste nivel → exclui da selecao
-    de alvo, permitindo navegacao multi-target (tu93: 2+ exits, m0r0: pares)."""
+def _pick_target(others, avatar, freq, target_color=None):
+    """Seleciona alvo: se target_color conhecido, filtra por cor. Senao, cor mais rara."""
+    ay, ax = avatar.centroid
+    if target_color is not None:
+        colored = [o for o in others if o.color == target_color]
+        if colored:
+            return min(colored, key=lambda o: abs(o.centroid[0] - ay) + abs(o.centroid[1] - ax))
+    return min(others, key=lambda o: (freq[o.color],
+                                      abs(o.centroid[0] - ay) + abs(o.centroid[1] - ax)))
+
+
+def navigate(scene, move, reached_ids=None, target_color=None):
+    """Navega o avatar ate o alvo mais proximo.
+    target_color: se fornecido (game knowledge), filtra alvos por essa cor.
+    reached_ids: set de object IDs ja alcancados → exclui da selecao de alvo."""
     moves = move.moves()
     if not moves:
         return None
@@ -93,8 +104,7 @@ def navigate(scene, move, reached_ids=None):
         return None
     freq = Counter(o.color for o in scene.objects)
     ay, ax = avatar.centroid
-    target = min(others, key=lambda o: (freq[o.color],
-                                        abs(o.centroid[0] - ay) + abs(o.centroid[1] - ax)))
+    target = _pick_target(others, avatar, freq, target_color)
     ty, tx = target.centroid
     cur_dist = abs(ty - ay) + abs(tx - ax)
     # Alvo alcancado (distancia < 3px): marca como reached e tenta o proximo
@@ -103,8 +113,7 @@ def navigate(scene, move, reached_ids=None):
         remaining = [o for o in others if o.id != target.id]
         if not remaining:
             return None
-        target = min(remaining, key=lambda o: (freq[o.color],
-                                               abs(o.centroid[0] - ay) + abs(o.centroid[1] - ax)))
+        target = _pick_target(remaining, avatar, freq, target_color)
         ty, tx = target.centroid
         cur_dist = abs(ty - ay) + abs(tx - ax)
     best, bd = None, cur_dist
@@ -116,7 +125,27 @@ def navigate(scene, move, reached_ids=None):
         nd = abs(ty - (ay + dr)) + abs(tx - (ax + dc))
         if nd < bd:
             bd, best = nd, k
-    # Se todas as direcoes boas estao bloqueadas, tenta qualquer uma (desbloqueio)
+    # Wall avoidance: se bloqueado na direcao desejada, tenta perpendicular.
+    # Em vez de ficar batendo na parede, contorna. Nao faz nada se ja esta no alvo.
+    if best is None and cur_dist > 2:
+        dy, dx = ty - ay, tx - ax
+        # Tenta direcao perpendicular ao eixo principal bloqueado
+        perp_candidates = []
+        for k, (dr, dc) in moves.items():
+            if blocked.get(k, 0) >= 2:
+                continue
+            # Perpendicular: move no eixo que nao e o principal
+            if abs(dy) >= abs(dx):
+                # Precisa ir em Y mas esta bloqueado -> tenta X
+                if dc != 0:
+                    perp_candidates.append((k, abs(ty - (ay + dr)) + abs(tx - (ax + dc))))
+            else:
+                # Precisa ir em X mas esta bloqueado -> tenta Y
+                if dr != 0:
+                    perp_candidates.append((k, abs(ty - (ay + dr)) + abs(tx - (ax + dc))))
+        if perp_candidates:
+            best = min(perp_candidates, key=lambda x: x[1])[0]
+    # Ultimo fallback: tenta qualquer direcao que aproxime
     if best is None:
         for k, (dr, dc) in moves.items():
             nd = abs(ty - (ay + dr)) + abs(tx - (ax + dc))

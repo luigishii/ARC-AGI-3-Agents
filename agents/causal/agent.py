@@ -26,7 +26,8 @@ from .iw import iw_plan
 from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
                     value_fn_from_reward, accept_reward, grounded_reward_fn,
                     grounded_multi_reward_fn, grounded_pattern_reward_fn,
-                    grounded_pair_reward_fn, grounded_template_reward_fn)
+                    grounded_pair_reward_fn, grounded_template_reward_fn,
+                    grounded_diversity_reward_fn)
 
 QUERY_COOLDOWN = 15
 GOAL_FAIL_MAX = 3
@@ -409,7 +410,13 @@ class CausalObjectAgent(Agent):
                 self._level_seq.append(self._last_key)
                 # transição DECISÃO→DECISÃO: alimenta retrodição + f_τ/η + movimento + forward
                 self._buffer.append((self._prev_scene, self._last_key, actual.kind))
-                self._last_effect_kind = actual.kind
+                # Pixel delta override: se CausalModel diz "none" mas >=5 pixels
+                # mudaram, a acao TEVE efeito (UI state change em r11l/ft09/s5i5).
+                # Usa "pixel" como effect_kind pra ativar two-phase e burst.
+                if actual.kind == "none" and self._last_pixel_delta >= 5:
+                    self._last_effect_kind = "pixel"
+                else:
+                    self._last_effect_kind = actual.kind
                 self._observe_types(self._prev_scene, scene, self._last_key)
                 self._track_rprog(scene)          # B′: delta de reward real por ação
                 self._track_cover()               # cobertura: conta a ação tomada
@@ -528,8 +535,12 @@ class CausalObjectAgent(Agent):
         # (2b) two-phase: se a ultima acao teve efeito, tenta a proxima fase.
         # Click→teclado (ka59, ar25, cn04, sp80), click→click (r11l, lf52),
         # OU teclado→teclado diferente (su15: grab→move→drop).
+        # Manipulacao (cls=C): ativa two-phase mesmo sem efeito detectado — selection
+        # em jogos como r11l nao registra como efeito no CausalModel.
+        _has_effect = self._last_effect_kind not in (None, "none")
+        _is_manip = self._gk.get("cls") in ("C", "B")
         if (cand is None and self._last_key is not None
-                and self._last_effect_kind not in (None, "none")):
+                and (_has_effect or _is_manip)):
             was_click = "@c" in (self._last_key or "")
             was_keyboard = not was_click and "@" not in (self._last_key or "")
             if was_click and has_keyboard:
@@ -562,7 +573,8 @@ class CausalObjectAgent(Agent):
                     self._move.avatar_counts[o.id] = self._move.avatar_counts.get(o.id, 0) + 10
                     break
         if cand is None and self._nav_on:
-            nk = navigate(scene, self._move, reached_ids=self._reached_ids)
+            nk = navigate(scene, self._move, reached_ids=self._reached_ids,
+                          target_color=self._gk.get("target"))
             if nk is not None:
                 cand = keymap.get(nk)
         # (3c) click replay: tenta keys que tiveram efeito em niveis anteriores.
@@ -593,8 +605,28 @@ class CausalObjectAgent(Agent):
             row = self._rprog.get(self._last_key)
             if row and len(row) >= 1 and row[-1] < -0.5:
                 cand = keymap["ACTION7"]
-        # ACTION5 burst: validar apos 3+ acoes distintas com efeito (sb26: click-click-RUN,
-        # wa30: grab+move+drop, cd82: fire apos montar). Mais responsivo que o periodico.
+        # ACTION5 estrategico por classe de jogo:
+        # B (sokoban): ACTION5 = grab/release. Tenta apos navegar perto de alvo.
+        # E (sequencia): ACTION5 = validar/RUN. Tenta apos montar a sequencia.
+        # F (fluxo): ACTION5 = escoar. Tenta apos posicionar barras.
+        gcls = self._gk.get("cls")
+        if cand is None and "ACTION5" in keymap and gcls in ("B", "E", "F"):
+            # Classe B: grab apos chegar perto de alvo (navigate proxima acao)
+            if gcls == "B" and self._burst_count >= 1:
+                cand = keymap["ACTION5"]
+                self._burst_count = 0
+                self._burst_distinct.clear()
+            # Classe E: validar apos 2+ cliques distintos (sequencia montada)
+            elif gcls == "E" and self._burst_count >= 2 and len(self._burst_distinct) >= 2:
+                cand = keymap["ACTION5"]
+                self._burst_count = 0
+                self._burst_distinct.clear()
+            # Classe F: escoar apos posicionar (3+ efeitos)
+            elif gcls == "F" and self._burst_count >= 3:
+                cand = keymap["ACTION5"]
+                self._burst_count = 0
+                self._burst_distinct.clear()
+        # ACTION5 burst: validar apos 3+ acoes distintas com efeito (generico).
         if (cand is None and "ACTION5" in keymap
                 and self._burst_count >= 3 and len(self._burst_distinct) >= 2):
             cand = keymap["ACTION5"]
@@ -1016,6 +1048,12 @@ class CausalObjectAgent(Agent):
                     self._reward_fn = grounded_reward_fn(ac, tgt.color)
                     self._reward_src = f"gk:-dist(cor{ac}->cor{tgt.color})"
                     return True
+            # Classe D (pintura/lights-out): diversity reward como proxy.
+            # ft09 (lights-out), cd82 (paint), re86 (snake tiling).
+            if gk.get("cls") == "D":
+                self._reward_fn = grounded_diversity_reward_fn()
+                self._reward_src = "gk:diversity(cls=D)"
+                return True
             # Template reward (mais precisa): usa o grid vencedor do nivel anterior
             if self._win_template is not None:
                 self._reward_fn = grounded_template_reward_fn(self._win_template)
