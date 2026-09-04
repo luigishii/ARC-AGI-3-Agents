@@ -27,7 +27,7 @@ from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
                     value_fn_from_reward, accept_reward, grounded_reward_fn,
                     grounded_multi_reward_fn, grounded_pattern_reward_fn,
                     grounded_pair_reward_fn, grounded_template_reward_fn,
-                    grounded_diversity_reward_fn)
+                    grounded_diversity_reward_fn, grounded_count_reward_fn)
 
 QUERY_COOLDOWN = 15
 GOAL_FAIL_MAX = 3
@@ -72,14 +72,17 @@ _GAME_KNOWLEDGE: dict[str, dict] = {
     # B. Sokoban / empurrar-blocos
     "ka59": {"avatar": None, "target": None, "click": None, "cls": "B", "hud_rows": [63]},
     "wa30": {"avatar": 14, "target": 2, "click": None, "cls": "B", "hud_rows": [63]},
-    "su15": {"avatar": None, "target": None, "click": None, "cls": "B", "hud_rows": []},
+    "su15": {"avatar": None, "target": None, "click": None, "cls": "B", "hud_rows": [],
+             "reward": "count"},   # onda de choque: menos blocos fora da zona = melhor
     # C. Manipulacao/posicionamento
     "vc33": {"avatar": None, "target": None, "click": {9, 1}, "cls": "C", "hud_rows": [0]},
     "ar25": {"avatar": None, "target": 11, "click": None, "cls": "C", "hud_cols": [63]},
-    "cn04": {"avatar": None, "target": None, "click": None, "cls": "C", "hud_rows": [0]},
+    "cn04": {"avatar": None, "target": None, "click": {8, 13}, "cls": "C", "hud_rows": [0]},
     "r11l": {"avatar": None, "target": None, "click": {3}, "cls": "C", "hud_rows": [0]},
-    "s5i5": {"avatar": None, "target": None, "click": None, "cls": "C", "hud_rows": []},
-    "lf52": {"avatar": None, "target": None, "click": {14}, "cls": "C", "hud_rows": [0]},
+    "s5i5": {"avatar": None, "target": None, "click": None, "cls": "C", "hud_rows": [],
+             "reward": "multi"},   # efetuador→alvo por posicao
+    "lf52": {"avatar": None, "target": None, "click": {14}, "cls": "C", "hud_rows": [0],
+             "reward": "count"},   # peg solitaire: menos pegs = melhor
     "lp85": {"avatar": None, "target": None, "click": {8, 14}, "cls": "C", "hud_rows": [0]},
     # D. Pintura
     "cd82": {"avatar": None, "target": None, "click": None, "cls": "D", "hud_rows": [63]},
@@ -313,6 +316,12 @@ class CausalObjectAgent(Agent):
         levels = latest_frame.levels_completed or 0
         if (levels == 0 and self.MAX_ACTIONS > 0
                 and self.action_counter >= self.MAX_ACTIONS * EARLY_EXIT_FRAC):
+            return True
+        # Aggressive early-exit: 30% do budget gastou e NENHUM efeito detectado
+        # (nem pixel) → jogo provavelmente incompativel, nao perde mais tempo.
+        if (levels == 0 and self.MAX_ACTIONS > 0
+                and self.action_counter >= self.MAX_ACTIONS * 0.3
+                and not self._seen_effects - {"none"}):
             return True
         return False
 
@@ -1088,17 +1097,35 @@ class CausalObjectAgent(Agent):
                     self._reward_fn = grounded_reward_fn(ac, tgt.color)
                     self._reward_src = f"gk:-dist(cor{ac}->cor{tgt.color})"
                     return True
-            # Classe B (sokoban): multi-align reward. wa30 recolora caixas (cor→0
-            # quando resolvida, cor 2 = alvo). Usa multi-reward por default.
+            # Per-game reward override: se o game knowledge especifica um reward type.
+            _rtype = gk.get("reward")
+            if _rtype == "count":
+                self._reward_fn = grounded_count_reward_fn()
+                self._reward_src = f"gk:count({getattr(self, 'game_id', '?')})"
+                return True
+            if _rtype == "multi":
+                self._reward_fn = grounded_multi_reward_fn()
+                self._reward_src = f"gk:multi({getattr(self, 'game_id', '?')})"
+                return True
+            # Classe B (sokoban): multi-align reward.
             if gk.get("cls") == "B":
                 self._reward_fn = grounded_multi_reward_fn()
                 self._reward_src = "gk:multi-align(cls=B/sokoban)"
                 return True
             # Classe D (pintura/lights-out): diversity reward como proxy.
-            # ft09 (lights-out), cd82 (paint), re86 (snake tiling).
             if gk.get("cls") == "D":
                 self._reward_fn = grounded_diversity_reward_fn()
                 self._reward_src = "gk:diversity(cls=D)"
+                return True
+            # Classe E (sequencia): pattern reward (referencia topo vs editavel baixo).
+            if gk.get("cls") == "E":
+                self._reward_fn = grounded_pattern_reward_fn()
+                self._reward_src = "gk:pattern(cls=E/sequencia)"
+                return True
+            # Classe F (fluxo): pattern reward (agua top→bottom).
+            if gk.get("cls") == "F":
+                self._reward_fn = grounded_pattern_reward_fn()
+                self._reward_src = "gk:pattern(cls=F/fluxo)"
                 return True
             # Template reward (mais precisa): usa o grid vencedor do nivel anterior
             if self._win_template is not None:

@@ -127,11 +127,18 @@ class Swarm:
             )
             self.agents.append(a)
 
+        # Per-game timeout: evita que 1 jogo lento (LLM OOM/deadlock) trave tudo.
+        game_timeout = int(os.environ.get("SWARM_GAME_TIMEOUT", "120"))
+
         if sequential:
             for a in self.agents:
                 t0 = time.time()
                 logger.info(f">>> STARTING {a.game_id}")
-                a.main()
+                t = Thread(target=a.main, daemon=True)
+                t.start()
+                t.join(timeout=game_timeout)
+                if t.is_alive():
+                    logger.warning(f"!!! TIMEOUT {a.game_id} after {game_timeout}s")
                 elapsed = time.time() - t0
                 levels = getattr(a, "levels_completed", 0)
                 acts = getattr(a, "action_counter", 0)
