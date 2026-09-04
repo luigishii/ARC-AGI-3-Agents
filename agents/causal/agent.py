@@ -254,6 +254,9 @@ class CausalObjectAgent(Agent):
         self._prev_scene = None
         self._buffer = deque(maxlen=int(os.environ.get("CAUSAL_BUFFER", "128")))
         self._last_key = None
+        self._last_xy = None            # (x,y) da ultima acao de clique (None = teclado)
+        self._cover_pts = []            # pontos ja clicados (farthest-first na cobertura)
+        self._layer_counts = {}         # telemetria: qual camada decidiu cada acao
         self._last_predicted = None
         self._last_level = 0
         self._seen_effects = set()
@@ -555,6 +558,7 @@ class CausalObjectAgent(Agent):
         if self._grounded and self._reward_fn is None:
             self._try_learn_reward(scene)
         cand = None
+        layer = None        # telemetria: camada que decidiu (preenchida nos sites abaixo)
         # (-1) Sweep de tipos: garante que cada TIPO de ação é testado 1x.
         # Ordem inteligente: teclado (1-4) primeiro (aprende MovementModel),
         # depois ACTION5/7 (grab/validate/undo), ACTION6 por ultimo.
@@ -572,6 +576,7 @@ class CausalObjectAgent(Agent):
             for k in sweep_order:
                 if k not in self._cover and k in keymap:
                     cand = keymap[k]
+                    layer = layer or "sweep"
                     break
         # (-0.5) Solution replay: se resolveu o nivel anterior, tenta replay-ar a
         # mesma sequencia no nivel seguinte. Muitos jogos ARC tem solucao similar.
@@ -579,6 +584,7 @@ class CausalObjectAgent(Agent):
             rkey = self._win_seq[self._replay_idx]
             if rkey in keymap:
                 cand = keymap[rkey]
+                layer = layer or "replay"
                 self._replay_idx += 1
             else:
                 # Key do replay nao existe neste nivel → aborta replay
@@ -599,19 +605,21 @@ class CausalObjectAgent(Agent):
                 for k in ("ACTION1", "ACTION2", "ACTION3", "ACTION4"):
                     if k in keymap and self._cover.get(k, 0) < 3:
                         cand = keymap[k]
+                        layer = layer or "2phase"
                         break
             if was_click and cand is None:
                 # Click→click diferente: outro objeto
                 alt = [c for c in cands if c.key != self._last_key
                        and c.has_object and c.key != "ACTION6@bg"]
                 if alt:
-                    best = min(alt, key=lambda c: self._cover.get(c.key, 0))
-                    cand = best
+                    cand = keymap.get(self._two_phase_click_pick(alt))
+                    layer = layer or "2phase"
             if was_keyboard and cand is None:
                 # Teclado→teclado diferente (su15: grab→move, sp80: flow→flow)
                 for k in ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5"):
                     if k in keymap and k != self._last_key and self._cover.get(k, 0) < 3:
                         cand = keymap[k]
+                        layer = layer or "2phase"
                         break
         # (3) navigate: avatar→alvo via MovementModel (heuristico, multi-target)
         # Game knowledge: se sabemos o avatar_color, força o avatar_id no MovementModel
@@ -628,15 +636,18 @@ class CausalObjectAgent(Agent):
                           target_color=self._gk.get("target"))
             if nk is not None:
                 cand = keymap.get(nk)
+                layer = layer or "nav"
         # (3c) click replay: tenta keys que tiveram efeito em niveis anteriores.
         # Prioritiza cores produtivas (level_up) e keys efetivas (efeito visivel).
         if cand is None and self._effective_keys:
             for ek in self._effective_keys:
                 if ek in keymap and self._cover.get(ek, 0) < 3:
                     cand = keymap[ek]
+                    layer = layer or "effkeys"
                     break
         if cand is None and self._rprog_on and cands:
             rk = self._rprog_decide(cands)    # B′: progresso model-free por reward real
+            layer = layer or ("rprog" if rk is not None else None)
             if rk is not None:
                 cand = keymap.get(rk)
         # Combo: se a ultima key faz parte de um combo positivo, executa a 2a key
@@ -649,6 +660,7 @@ class CausalObjectAgent(Agent):
                         best_combo_key = k2
             if best_combo_key is not None:
                 cand = keymap[best_combo_key]
+                layer = layer or "combo"
         # ACTION7 reativo: undo quando a ultima acao piorou o reward (delta < 0).
         # Cobre ar25, lf52, sb26, sk48, su15 — jogos com undo estrategico.
         if (cand is None and self._last_key is not None
@@ -656,6 +668,7 @@ class CausalObjectAgent(Agent):
             row = self._rprog.get(self._last_key)
             if row and len(row) >= 1 and row[-1] < -0.5:
                 cand = keymap["ACTION7"]
+                layer = layer or "undo"
         # ACTION5 estrategico por classe de jogo:
         # B (sokoban): ACTION5 = grab/release. Tenta apos navegar perto de alvo.
         # E (sequencia): ACTION5 = validar/RUN. Tenta apos montar a sequencia.
@@ -665,22 +678,26 @@ class CausalObjectAgent(Agent):
             # Classe B: grab apos chegar perto de alvo (navigate proxima acao)
             if gcls == "B" and self._burst_count >= 1:
                 cand = keymap["ACTION5"]
+                layer = layer or "burst"
                 self._burst_count = 0
                 self._burst_distinct.clear()
             # Classe E: validar apos 2+ cliques distintos (sequencia montada)
             elif gcls == "E" and self._burst_count >= 2 and len(self._burst_distinct) >= 2:
                 cand = keymap["ACTION5"]
+                layer = layer or "burst"
                 self._burst_count = 0
                 self._burst_distinct.clear()
             # Classe F: escoar apos posicionar (3+ efeitos)
             elif gcls == "F" and self._burst_count >= 3:
                 cand = keymap["ACTION5"]
+                layer = layer or "burst"
                 self._burst_count = 0
                 self._burst_distinct.clear()
         # ACTION5 burst: validar apos 3+ acoes distintas com efeito (generico).
         if (cand is None and "ACTION5" in keymap
                 and self._burst_count >= 3 and len(self._burst_distinct) >= 2):
             cand = keymap["ACTION5"]
+            layer = layer or "burst"
             self._burst_count = 0
             self._burst_distinct.clear()
         # ACTION5 periodico (fallback): tenta a cada 8 acoes se houve efeitos recentes.
@@ -689,18 +706,22 @@ class CausalObjectAgent(Agent):
                 and self.action_counter % 8 < 2
                 and any(e != "none" for e in list(self._seen_effects)[:5])):
             cand = keymap["ACTION5"]
+            layer = layer or "burst"
         if cand is None and self._iw_on and cands:
             ik = self._iw_decide(scene, cands)     # IW sobre o TypedWorldModel (f_τ)
             if ik is not None:
                 cand = keymap.get(ik)
+                layer = layer or "iw"
         # --- LLM strategies (so apos _llm_defer acoes heuristicas) ---
         if cand is None and self._direct_on:
             cand = self._direct_decide(scene, avail, keymap, moves)
+            layer = layer or ("direct" if cand is not None else None)
         if cand is None and self._goal is not None:
             self._goal_age += 1
             gkey = execute_goal(self._goal, scene, moves)
             if gkey is not None and gkey in keymap:
                 cand = keymap[gkey]
+                layer = layer or "goal"
                 self._goal_fails = 0
                 if self._goal.get("type") == "press":
                     self._goal = None
@@ -712,18 +733,23 @@ class CausalObjectAgent(Agent):
                 self._goal = None
         if cand is None and self._plan_on and cands:
             planned = plan(state_signature(scene), [c.key for c in cands],
-                           self._tmodel, self._novelty, self._novelty.goal_anchors)
+                           self._tmodel, self._novelty, self._novelty.goal_anchors,
+                           key_prior=lambda k: self._key_productivity(k, keymap[k]))
             if planned is not None:
                 cand = keymap.get(planned)
+                layer = layer or "plan"
         if cand is None and self._eta_on and cands:
             ek = self._eta_explore(cands)     # sonda a ação de linha mais ambígua (η alto)
             if ek is not None:
                 cand = keymap.get(ek)
+                layer = layer or "eta"
         if cand is None and self._cover_on and cands:
-            ck = self._cover_decide(cands)    # exploração por cobertura (anti-fixação)
+            ck = self._cover_decide(cands, untried_only=True)   # so chaves nunca tentadas
             if ck is not None:
                 cand = keymap.get(ck)
+                layer = layer or "cover"
         if cand is None:
+            layer = "greedy"
             cand = self._policy.decide(
                 scene, self._model, avail,
                 self._seen_effects, budget_frac, novelty=self._novelty, prior=self._prior,
@@ -768,7 +794,12 @@ class CausalObjectAgent(Agent):
                 self._stale_count = 0
                 self._pending_log = None
                 return GameAction.RESET
+        before_fix = cand
         cand = self._antifix(cand, cands, keymap)   # guarda global anti-fixação
+        if cand is not before_fix:
+            layer = "antifix"
+        layer = layer or "heur"      # sweep/2-fases/replay/burst (camadas heuristicas)
+        self._layer_counts[layer] = self._layer_counts.get(layer, 0) + 1
         action = cand.action
         if action.is_complex():
             action.set_data({"x": cand.x, "y": cand.y})
@@ -776,7 +807,7 @@ class CausalObjectAgent(Agent):
         predicted, conf = self._model.predict(cand.key)
         mode = "EXPLOIT" if self._model.is_progress(cand.key) else "EXPLORE"
         action.reasoning = {
-            "key": cand.key, "mode": mode,
+            "key": cand.key, "mode": mode, "layer": layer,
             "predicted": None if predicted is None else predicted.kind,
             "confidence": round(conf, 3), "model": self._model.stats(),
             "novelty_yield": round(self._novelty.yield_estimate(cand.key), 3),
@@ -790,13 +821,14 @@ class CausalObjectAgent(Agent):
             "mode": mode,
             "predicted": predicted,
             "model_stats": self._model.stats(),
-            "reasoning": {"key": cand.key},
+            "reasoning": {"key": cand.key, "layer": layer},
         }
 
         # guarda estado p/ o próximo passo
         self._prev_scene = scene
         self._prev_grid = grid
         self._last_key = cand.key
+        self._last_xy = (cand.x, cand.y) if cand.x is not None else None
         self._last_sig = state_signature(scene)
         self._last_feature = abstract_feature(cand)
         self._last_predicted = predicted
@@ -834,6 +866,28 @@ class CausalObjectAgent(Agent):
             if r is not None:                    # achou ação que melhora o valor
                 self._iw_goal_hits += 1
         return r
+
+    def _two_phase_click_pick(self, alt) -> str:
+        """Clique->clique: prefere chave NAO conhecida como inerte (produtividade
+        aprendida > 0), depois a menos visitada. Antes escolhia so a menos visitada e
+        gastava dezenas de acoes em objetos ja vistos como inertes."""
+        def rank(c):
+            prod = self._key_productivity(c.key, c)
+            return (1 if prod <= 0.0 else 0, self._cover.get(c.key, 0), -prod)
+        return min(alt, key=rank).key
+
+    def _key_productivity(self, key, cand) -> float:
+        """P(efeito != none) da chave: pelo CausalModel se ja vista; senao pelo
+        TransferPrior da feature abstrata (simple/click_on_object/click_empty)."""
+        d = self._model.rules.get(key)
+        if d:
+            total = sum(d.values())
+            none = sum(c for tok, c in d.items() if tok.startswith("none"))
+            return 1.0 - none / total if total else 0.5
+        try:
+            return float(self._prior.productivity(abstract_feature(cand)))
+        except Exception:
+            return 0.5
 
     def _take_llm_call(self, per_game: bool = True) -> bool:
         """Reserva 1 chamada de LLM: respeita o cap por-jogo (opcional) e o cap GLOBAL
@@ -1002,11 +1056,26 @@ class CausalObjectAgent(Agent):
         """Conta a ação efetivamente tomada (p/ o sweep de cobertura). Só decisão→decisão."""
         if self._last_key is not None:
             self._cover[self._last_key] = self._cover.get(self._last_key, 0) + 1
+            if self._last_xy is not None:
+                self._cover_pts.append(self._last_xy)
 
-    def _cover_decide(self, cands):
-        """Exploração por cobertura: escolhe a candidata MENOS visitada. Prioriza
-        TIPOS de ação não-testados (keyboard/ACTION5/7 > click repetido),
-        has_object antes de vazio, objetos pequenos, evita repetir a última ação."""
+    def _cover_decide(self, cands, untried_only: bool = False):
+        """Exploração por cobertura. untried_only=True (pilha): só chaves NUNCA tentadas —
+        tudo tentado -> None (cede pra novidade-de-estado/greedy em vez de round-robin).
+        False (antifix): a MENOS visitada. Ordem: teclado não-testado > farthest-first
+        espacial (longe do que já foi clicado; varre todas as regiões cedo, não raster)
+        > has_object > evita a última > menor objeto."""
+        if untried_only:
+            cands = [c for c in cands if self._cover.get(c.key, 0) == 0]
+            if not cands:
+                return None
+        pts = self._cover_pts
+
+        def far(c):   # -min dist aos pontos ja clicados (teclado/sem pontos = neutro)
+            if c.x is None or not pts:
+                return 0
+            return -min(abs(c.x - px) + abs(c.y - py) for px, py in pts)
+
         def rank(c):
             visits = self._cover.get(c.key, 0)
             # Tipos de ação não-testados (ACTION1-5,7) tem prioridade sobre
@@ -1014,7 +1083,7 @@ class CausalObjectAgent(Agent):
             # são descobertos cedo em jogos mistos.
             is_keyboard = c.x is None   # keyboard actions tem x=None
             type_prio = 0 if (is_keyboard and visits == 0) else 1
-            return (visits, type_prio,
+            return (visits, type_prio, far(c),
                     0 if c.has_object else 1,
                     1 if c.key == self._last_key else 0,
                     c.obj_size)
@@ -1323,6 +1392,7 @@ class CausalObjectAgent(Agent):
             "direct_hits": self._direct_hits,
             "gk_src": self._gk_src,
             "llm_total_calls": _LLM_TOTAL["calls"],
+            "layers": dict(self._layer_counts),
             "eta_rows": len(self._etable.rows),
             "productive_colors": sorted(self._productive_colors),
             "stale_count": self._stale_count,

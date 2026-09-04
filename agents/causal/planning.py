@@ -51,7 +51,10 @@ def _terminal_score(sig, frontier, novelty, anchors):
 
 
 def plan(start_sig, start_keys, tmodel, novelty, anchors,
-         depth=PLAN_DEPTH, beam=PLAN_BEAM):
+         depth=PLAN_DEPTH, beam=PLAN_BEAM, key_prior=None):
+    """key_prior(key)->[0,1]: produtividade aprendida da chave-raiz. So pesa na FRONTEIRA
+    (transicao desconhecida): sem isso toda fronteira empata em 1.0 e o max() devolve a
+    1a da lista (= raster), gastando acoes em chaves ja vistas como inertes."""
     if not start_keys:
         return None
     # exige ao menos uma transição conhecida a partir do estado atual
@@ -65,8 +68,11 @@ def plan(start_sig, start_keys, tmodel, novelty, anchors,
         nodes.append((k, nxt if nxt is not None else start_sig, nxt is None))
 
     def score(node):
-        _, sig, frontier = node
-        return _terminal_score(sig, frontier, novelty, anchors)
+        first, sig, frontier = node
+        base = _terminal_score(sig, frontier, novelty, anchors)
+        if frontier and key_prior is not None:
+            base += 0.5 * (float(key_prior(first) or 0.0) - 0.5)   # [-0.25, +0.25]
+        return base
 
     for _ in range(1, depth):
         nodes.sort(key=score, reverse=True)

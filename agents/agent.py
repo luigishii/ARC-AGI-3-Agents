@@ -88,8 +88,9 @@ class Agent(ABC):
                 r = getattr(action, "reasoning", None) or {}
                 key = r.get("key", "")
                 mode = r.get("mode", "")
+                layer = r.get("layer", "")
                 pred = r.get("predicted", "")
-                extra = f" [{key}] {mode}" if key else ""
+                extra = f" [{key}] {mode}" + (f"/{layer}" if layer else "") if key else ""
                 eff = f" pred={pred}" if pred else ""
                 logger.info(
                     f"{self.game_id} - {action.name}{extra}{eff}: count {self.action_counter}, levels completed {frame.levels_completed}, avg fps {self.fps})"
