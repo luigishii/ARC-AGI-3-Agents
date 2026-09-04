@@ -69,3 +69,17 @@ def test_direct_prompt_hard_constrains():
 def test_direct_prompt_press_example_uses_available():
     p = build_direct_prompt(_scene(_obj()), {"available": ["ACTION3", "ACTION4"]})
     assert '{"type":"press","action":"ACTION3"}' in p
+
+
+def test_direct_prompt_shows_inferred_roles():
+    ctx = {"game_class": "A", "avatar_color": 9, "target_color": 5, "click_colors": [9, 1]}
+    p = build_direct_prompt(_scene(_obj()), {"available": ["ACTION1"]}, None, context=ctx)
+    assert "GAME CLASS: A" in p and "Navigation" in p
+    assert "AVATAR COLOR: 9" in p and "TARGET COLOR: 5" in p
+    assert "CLICKABLE COLORS: [1, 9]" in p
+
+
+def test_direct_prompt_omits_roles_when_unknown():
+    p = build_direct_prompt(_scene(_obj()), {"available": ["ACTION1"]}, None,
+                            context={"step": 3, "game_class": None})
+    assert "GAME CLASS" not in p and "AVATAR COLOR" not in p

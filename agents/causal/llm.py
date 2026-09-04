@@ -82,6 +82,16 @@ _CLASS_INSTRUCTION = (
 )
 
 
+_CLASS_NAMES = {
+    "A": "Navigation (avatar reaches target position)",
+    "B": "Sokoban (push boxes onto targets)",
+    "C": "Piece manipulation (select, move/rotate to align)",
+    "D": "Painting/pattern fill (match a target pattern)",
+    "E": "Sequence/program then VALIDATE (run action checks it)",
+    "F": "Flow routing (fill all buckets)",
+}
+
+
 def build_class_prompt(scene, dyn) -> str:
     """Prompt de inferencia de CLASSE (1 chamada por jogo): taxonomia A-F + grid ASCII +
     objetos + available. Saida via parse_class -> dict no formato de _GAME_KNOWLEDGE."""
@@ -191,8 +201,13 @@ def extract_final_channel(text: str) -> str:
     return _strip_harmony_markers(seg).strip()
 
 
+def resolve_effort(explicit=None) -> str:
+    """Esforco de raciocinio (gpt-oss/Harmony): explicito > env CAUSAL_EFFORT > medium."""
+    return explicit or os.environ.get("CAUSAL_EFFORT", "medium")
+
+
 class LLMClient:
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, effort=None) -> str:
         raise NotImplementedError
 
     def complete_many(self, prompt: str, n: int) -> list:
@@ -202,7 +217,7 @@ class LLMClient:
 
 
 class NullLLMClient(LLMClient):
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, effort=None) -> str:
         return ""
 
 
@@ -215,7 +230,7 @@ class VLLMClient(LLMClient):
                         gpu_memory_utilization=0.9)
         self._sp = SamplingParams(temperature=0.2, max_tokens=max_tokens)
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, effort=None) -> str:
         out = self._llm.generate([prompt], self._sp)
         return out[0].outputs[0].text
 
@@ -258,14 +273,15 @@ class HFClient(LLMClient):
         self._max = max(max_tokens, 2048) if self._harmony else max_tokens
         self._gen_lock = threading.Lock()   # serializa generate entre threads do Swarm
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, effort=None) -> str:
         import torch
         with self._gen_lock:                # model.generate não é thread-safe concorrente
             msgs = [{"role": "user", "content": prompt}]
             if self._harmony:
                 # gpt-oss: aplica esforco de raciocinio; decodifica COM marcadores de
                 # canal e extrai SO o canal `final` (a resposta), descartando o CoT.
-                effort = os.environ.get("CAUSAL_EFFORT", "medium")
+                # `low` no direct (por passo, ~3x mais rapido); `medium` na classe/reward.
+                effort = resolve_effort(effort)
                 try:
                     enc = self._tok.apply_chat_template(
                         msgs, add_generation_prompt=True, return_tensors="pt",
@@ -417,6 +433,15 @@ def build_direct_prompt(scene, dyn, last=None, context=None) -> str:
                      f"reward={ctx.get('reward_src', '?')}")
         if ctx.get("moves"):
             lines.append(f"KEYBOARD MAP: {ctx['moves']}")
+        gc = ctx.get("game_class")
+        if gc:   # papeis inferidos (classe/tabela): a chamada cara raciocina com o que ja sabe
+            lines.append(f"GAME CLASS: {gc} = {_CLASS_NAMES.get(gc, '?')}")
+            if ctx.get("avatar_color") is not None:
+                lines.append(f"AVATAR COLOR: {ctx['avatar_color']} (moved by keyboard actions)")
+            if ctx.get("target_color") is not None:
+                lines.append(f"TARGET COLOR: {ctx['target_color']} (goal)")
+            if ctx.get("click_colors"):
+                lines.append(f"CLICKABLE COLORS: {sorted(ctx['click_colors'])} (only these react to clicks)")
         if ctx.get("productive_colors"):
             lines.append(f"PRODUCTIVE COLORS (solved levels): {ctx['productive_colors']}")
         if ctx.get("stale"):

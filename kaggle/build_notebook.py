@@ -68,8 +68,16 @@ ENV = (
     "OPERATION_MODE=online\n"
     "RECORDINGS_DIR=/kaggle/working/server_recording\n"
     "CAUSAL_PRIOR=" + REPO + "/agents/causal/prior.json\n"
-    "CAUSAL_MAX_ACTIONS=100000\n"
+    "CAUSAL_MAX_ACTIONS=1500\n"    # reativa early-exit (65% sem level-up) na eval; era 100000
     "CAUSAL_LLM=1\n"
+    # gpt-oss ~30s/chamada + Swarm PARALELO serializado por lock -> sem estes caps a
+    # submissao inteira fica na fila do LLM (a de 0.08 usava Qwen3-32B a 1.1s).
+    "CAUSAL_LLM_MAX_CALLS=4\n"      # por jogo
+    "CAUSAL_LLM_DEFER=50\n"         # acoes heuristicas antes do LLM
+    "CAUSAL_DIRECT_COOLDOWN=20\n"   # direct esparso (default 2)
+    "CAUSAL_LLM_TOTAL_CALLS=600\n"  # cap global por processo (~5h a 30s/chamada)
+    "CAUSAL_DIRECT_EFFORT=low\n"    # direct em low (rapido); classe/reward em CAUSAL_EFFORT
+    "SWARM_DEADLINE_S=30000\n"      # 8h20 desde o inicio do Swarm: fecha o scorecard antes do kill
     "CAUSAL_TYPED=1\n"       # síntese fatorada f_τ (Qwen valida por-tipo via accept_rule)
     "CAUSAL_ETA=1\n"         # exploração por erro de ontologia (η)
     "CAUSAL_IW=1\n"          # planner Iterated Width sobre o TypedWorldModel

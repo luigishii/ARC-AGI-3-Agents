@@ -96,6 +96,14 @@ class Swarm:
     def main(self) -> EnvironmentScorecard | None:
         """The main orchestration loop, continues until all agents are done."""
 
+        # Deadline global (s, desde AQUI — inclui o load do modelo): garante que o
+        # scorecard fecha antes do kill de wall-clock do Kaggle. 0/ausente = sem deadline.
+        t_start = time.time()
+        deadline = float(os.environ.get("SWARM_DEADLINE_S", "0") or 0)
+
+        def _remaining():
+            return None if not deadline else max(0.0, deadline - (time.time() - t_start))
+
         # submit start of scorecard
         print("***** MAKING SCORECARD")
         self.card_id = self.open_scorecard()
@@ -135,8 +143,12 @@ class Swarm:
                 t0 = time.time()
                 logger.info(f">>> STARTING {a.game_id}")
                 t = Thread(target=a.main, daemon=True)
+                rem = _remaining()
+                if rem is not None and rem <= 0:
+                    logger.warning(f"!!! DEADLINE: skipping {a.game_id}")
+                    a.stop_requested = True
                 t.start()
-                t.join(timeout=game_timeout)
+                t.join(timeout=game_timeout if rem is None else max(1.0, min(game_timeout, rem)))
                 if t.is_alive():
                     logger.warning(f"!!! TIMEOUT {a.game_id} after {game_timeout}s")
                     # Pede parada cooperativa: sem isso a thread daemon continuava
@@ -159,7 +171,13 @@ class Swarm:
             for t in self.threads:
                 t.start()
             for t in self.threads:
-                t.join()
+                t.join(timeout=_remaining())
+            if deadline and any(t.is_alive() for t in self.threads):
+                logger.warning(f"!!! DEADLINE {deadline}s: requesting stop on all agents")
+                for a in self.agents:
+                    a.stop_requested = True
+                for t in self.threads:
+                    t.join(timeout=60)
 
         # all agents are now done
         card_id = self.card_id

@@ -1,5 +1,6 @@
 import os
 import math
+import inspect
 from collections import deque
 from typing import Any
 
@@ -19,7 +20,7 @@ from .navigate import MovementModel, navigate
 from .perception_strategy import PerceptionStrategy
 from .llm import (shared_llm_client, build_prompt, build_direct_prompt,
                   build_class_prompt, parse_class, parse_goal, execute_goal,
-                  client_kind)
+                  client_kind, resolve_effort)
 from .ranker import rank_candidates
 from .ontology import LocalEffectTable, effect_signature
 from .typed_model import TypedWorldModel, accept_rule
@@ -53,6 +54,15 @@ _GAME_BUDGETS: dict[str, int] = {
     # Desconhecido
     "bp35": 150,
 }
+
+# Budget por CLASSE inferida (jogo nao-visto, sem env e sem prefixo na tabela acima).
+# Click-only (sem tecla no available) = 80 independente da classe.
+_CLASS_BUDGETS: dict[str, int] = {"A": 150, "B": 200, "C": 200, "D": 200, "E": 200, "F": 200}
+_CLICK_ONLY_BUDGET = 80
+
+# Cap GLOBAL de chamadas LLM por processo (todas as threads do Swarm). gpt-oss ~30s/chamada
+# serializado por lock: N jogos x chamadas ilimitadas = o run inteiro na fila do LLM.
+_LLM_TOTAL = {"calls": 0}
 
 # Fracao do budget apos a qual, sem level_up, o agente desiste (early-exit).
 EARLY_EXIT_FRAC = 0.65
@@ -186,10 +196,13 @@ class CausalObjectAgent(Agent):
     def _init_causal_state(self) -> None:
         # Budget dinamico: usa mapeamento por jogo se env var nao foi setada explicitamente.
         env_budget = os.environ.get("CAUSAL_MAX_ACTIONS")
+        gid = getattr(self, "game_id", "")
+        known_budget = any(gid.startswith(prefix) for prefix in _GAME_BUDGETS)
+        # Budget fixo (env ou tabela) NAO e substituido pela classe inferida.
+        self._budget_fixed = env_budget is not None or known_budget
         if env_budget is not None:
             self.MAX_ACTIONS = int(env_budget)
         else:
-            gid = getattr(self, "game_id", "")
             self.MAX_ACTIONS = next(
                 (b for prefix, b in _GAME_BUDGETS.items() if gid.startswith(prefix)),
                 type(self).MAX_ACTIONS,
@@ -503,9 +516,9 @@ class CausalObjectAgent(Agent):
                                 else GameAction.from_id(a)).is_complex() for a in avail)
         if (self._llm_on and has_keyboard and self._goal is None
                 and self._since_query >= QUERY_COOLDOWN
-                and self._llm_calls < self._llm_max and not self._direct_on
-                and self.action_counter >= self._llm_defer):
-            self._llm_calls += 1
+                and not self._direct_on
+                and self.action_counter >= self._llm_defer
+                and self._take_llm_call()):
             dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
             prompt = build_prompt(scene, dyn)
             if self._n_samples > 1:
@@ -822,6 +835,29 @@ class CausalObjectAgent(Agent):
                 self._iw_goal_hits += 1
         return r
 
+    def _take_llm_call(self, per_game: bool = True) -> bool:
+        """Reserva 1 chamada de LLM: respeita o cap por-jogo (opcional) e o cap GLOBAL
+        (CAUSAL_LLM_TOTAL_CALLS, compartilhado por todas as threads). False = nao chamar."""
+        if per_game and self._llm_calls >= self._llm_max:
+            return False
+        total_max = int(os.environ.get("CAUSAL_LLM_TOTAL_CALLS", "0") or 0)
+        if total_max and _LLM_TOTAL["calls"] >= total_max:
+            return False
+        _LLM_TOTAL["calls"] += 1
+        self._llm_calls += 1
+        return True
+
+    def _complete(self, prompt: str, effort=None) -> str:
+        """complete() passando `effort=` so se o client aceita (FakeLLM antigos nao).
+        Inspeciona na hora (o _llm pode ser trocado apos o init)."""
+        try:
+            ok = "effort" in inspect.signature(self._llm.complete).parameters
+        except (TypeError, ValueError):
+            ok = False
+        if ok:
+            return self._llm.complete(prompt, effort=effort)
+        return self._llm.complete(prompt)
+
     def _seed_hud(self, gk) -> None:
         for r in gk.get("hud_rows", []):
             self._hud.row_count[r] = HudMask._SEED
@@ -838,10 +874,12 @@ class CausalObjectAgent(Agent):
                 or self._gk or self.action_counter < self._class_at):
             return
         self._class_done = True
-        self._llm_calls += 1
+        if not self._take_llm_call(per_game=False):   # so o cap global barra a classe
+            return
         try:
             dyn = {"available": [str(a) for a in avail]}
-            info = parse_class(self._llm.complete(build_class_prompt(scene, dyn)))
+            info = parse_class(self._complete(build_class_prompt(scene, dyn),
+                                              effort=resolve_effort(None)))
         except Exception:
             info = None
         if info is None:
@@ -849,6 +887,12 @@ class CausalObjectAgent(Agent):
         self._gk = info
         self._gk_src = f"llm:{info['cls']}"
         self._seed_hud(info)
+        if not self._budget_fixed:   # budget da classe (jogo nao-visto, sem env/tabela)
+            click_only = not any(
+                not (a if isinstance(a, GameAction) else GameAction.from_id(a)).is_complex()
+                for a in avail)
+            self.MAX_ACTIONS = (_CLICK_ONLY_BUDGET if click_only
+                                else _CLASS_BUDGETS.get(info["cls"], type(self).MAX_ACTIONS))
 
     def _direct_decide(self, scene, avail, keymap, moves):
         """Score-max Lever #2: consulta o LLM pela PROXIMA acao imediata (esparso via
@@ -861,7 +905,8 @@ class CausalObjectAgent(Agent):
         if self.action_counter < self._llm_defer:
             return None
         self._since_direct = 0
-        self._llm_calls += 1
+        if not self._take_llm_call():
+            return None
         self._direct_calls += 1
         dyn = {"available": [str(a) for a in avail], "moves": moves, "notes": ""}
         last = {"key": self._last_key, "effect": self._last_effect_kind}
@@ -870,11 +915,16 @@ class CausalObjectAgent(Agent):
             "levels": self._last_level,
             "reward_src": self._reward_src,
             "moves": moves or None,
+            "game_class": self._gk.get("cls"),
+            "avatar_color": self._gk.get("avatar"),
+            "target_color": self._gk.get("target"),
+            "click_colors": self._gk.get("click"),
             "productive_colors": sorted(self._productive_colors) or None,
             "stale": self._stale_count if self._stale_count >= 5 else None,
         }
         try:
-            resp = self._llm.complete(build_direct_prompt(scene, dyn, last, context=ctx))
+            resp = self._complete(build_direct_prompt(scene, dyn, last, context=ctx),
+                                  effort=os.environ.get("CAUSAL_DIRECT_EFFORT", "low"))
             g = parse_goal(resp)
             key = execute_goal(g, scene, moves) if g is not None else None
         except Exception:
@@ -1221,7 +1271,8 @@ class CausalObjectAgent(Agent):
         states.append([(o.shape_hash, _obj_state(o)) for o in scene.objects])
         prompt = self._build_reward_prompt(scene)
         for _ in range(self._repair_max + 1):
-            self._llm_calls += 1
+            if not self._take_llm_call(per_game=False):
+                break
             resps = (self._llm.complete_many(prompt, self._n_samples)
                      if self._n_samples > 1 else [self._llm.complete(prompt)])
             last_err = "sem resposta"
@@ -1271,6 +1322,7 @@ class CausalObjectAgent(Agent):
             "direct_calls": self._direct_calls,
             "direct_hits": self._direct_hits,
             "gk_src": self._gk_src,
+            "llm_total_calls": _LLM_TOTAL["calls"],
             "eta_rows": len(self._etable.rows),
             "productive_colors": sorted(self._productive_colors),
             "stale_count": self._stale_count,
@@ -1296,7 +1348,8 @@ class CausalObjectAgent(Agent):
             return False
         prompt = self._build_type_prompt(tau, buf)
         for _ in range(self._repair_max + 1):
-            self._llm_calls += 1
+            if not self._take_llm_call(per_game=False):
+                break
             if self._n_samples > 1:
                 resps = self._llm.complete_many(prompt, self._n_samples)
             else:

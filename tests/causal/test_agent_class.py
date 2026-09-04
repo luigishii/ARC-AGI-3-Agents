@@ -100,3 +100,63 @@ def test_class_infer_runs_in_blind_mode(monkeypatch):
     a._llm = _Fake(_CLASS_JSON)
     a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION6]))
     assert a._llm.calls == 1 and a._gk["cls"] == "A"
+
+
+class _Seq:
+    """FakeLLM que devolve respostas em sequencia e grava prompt+effort."""
+    def __init__(self, *canned):
+        self.canned, self.calls, self.prompts, self.efforts = list(canned), 0, [], []
+
+    def complete(self, prompt, effort=None):
+        self.calls += 1
+        self.prompts.append(prompt)
+        self.efforts.append(effort)
+        return self.canned[min(self.calls - 1, len(self.canned) - 1)]
+
+
+def test_inferred_class_reaches_direct_prompt_and_efforts(monkeypatch):
+    monkeypatch.delenv("CAUSAL_DIRECT_EFFORT", raising=False)
+    monkeypatch.setenv("CAUSAL_EFFORT", "medium")
+    a = _agent(monkeypatch, CAUSAL_CLASS="1", CAUSAL_DIRECT="1", CAUSAL_LLM_DEFER="0",
+               CAUSAL_DIRECT_COOLDOWN="0")
+    a._llm = _Seq(_CLASS_JSON, '{"type":"press","action":"ACTION1"}')
+    a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION1, GameAction.ACTION6]))
+    assert a._llm.calls == 2
+    assert "GAME CLASS: A" in a._llm.prompts[1]
+    assert "AVATAR COLOR: 9" in a._llm.prompts[1]
+    assert a._llm.efforts == ["medium", "low"]     # classe=medium, direct=low
+
+
+def _blind_budget_agent(monkeypatch, **env):
+    monkeypatch.delenv("CAUSAL_MAX_ACTIONS", raising=False)
+    env.setdefault("CAUSAL_LLM", "1")
+    env.setdefault("CAUSAL_CLASS", "1")
+    env.setdefault("CAUSAL_DIRECT", "0")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    a = CausalObjectAgent.__new__(CausalObjectAgent)
+    a.action_counter = 8
+    a.game_id = "zzzz-unknown"
+    a._init_causal_state()
+    return a
+
+
+def test_budget_follows_inferred_class_keyboard(monkeypatch):
+    a = _blind_budget_agent(monkeypatch)
+    a._llm = _Fake(_CLASS_JSON)                     # cls A (navegacao)
+    a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION1, GameAction.ACTION2]))
+    assert a.MAX_ACTIONS == 150
+
+
+def test_budget_follows_inferred_class_click_only(monkeypatch):
+    a = _blind_budget_agent(monkeypatch)
+    a._llm = _Fake('{"cls":"C","avatar":null,"target":null,"click":[9],"hud_rows":[],"hud_cols":[]}')
+    a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION6]))
+    assert a.MAX_ACTIONS == 80
+
+
+def test_budget_env_override_wins_over_class(monkeypatch):
+    a = _blind_budget_agent(monkeypatch, CAUSAL_MAX_ACTIONS="1500")
+    a._llm = _Fake(_CLASS_JSON)
+    a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION1]))
+    assert a.MAX_ACTIONS == 1500

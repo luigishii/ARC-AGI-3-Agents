@@ -71,3 +71,29 @@ def test_swarm_sequential_timeout_requests_stop(mock_arcade, monkeypatch, tmp_pa
     assert all(a.stop_requested for a in swarm.agents)
     time.sleep(0.3)
     assert all(a.calls == getattr(a, "calls") for a in swarm.agents)   # parou (nao cresce)
+
+
+@pytest.mark.unit
+@patch("agents.swarm.Arcade")
+def test_swarm_parallel_deadline_requests_stop(mock_arcade, monkeypatch, tmp_path):
+    monkeypatch.setenv("SWARM_DEADLINE_S", "1")
+    monkeypatch.chdir(tmp_path)
+
+    class _Hang(_Loop):
+        def choose_action(self, frames, latest_frame):
+            self.calls += 1
+            time.sleep(0.05)
+            if self.calls >= 400:            # auto-encerra em ~20s: sem a feature o
+                self.stop_requested = True   # teste FALHA por tempo em vez de travar
+            return GameAction.ACTION1
+
+    swarm = Swarm(agent="random", ROOT_URL="http://x", games=["g1", "g2", "g3"])
+    swarm.agent_class = _Hang
+    swarm._arc.operation_mode = "ONLINE"            # forca o caminho PARALELO
+    swarm._arc.open_scorecard.return_value = "card"
+    swarm._arc.close_scorecard.return_value = None
+    t0 = time.time()
+    swarm.main()
+    assert time.time() - t0 < 8
+    assert all(a.stop_requested for a in swarm.agents)
+    assert all(a.calls > 0 for a in swarm.agents)   # jogaram de fato ate o deadline

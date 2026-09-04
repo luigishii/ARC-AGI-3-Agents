@@ -122,3 +122,14 @@ def test_model_path_discovered_by_glob(tmp_path):
     for ln in bn.MODEL_DISCOVERY.splitlines():      # indentado dentro do `if rerun:`
         assert ln.strip() in cell1
     assert "gpt-oss" in bn.MODEL_DISCOVERY
+
+
+def test_env_submission_tuned_for_slow_llm():
+    """gpt-oss ~30s/chamada + Swarm PARALELO serializado por lock: sem cap por jogo,
+    cooldown alto e cap global, a submissao inteira fica na fila do LLM."""
+    bn = _load_module()
+    assert "CAUSAL_LLM_MAX_CALLS=" in bn.ENV
+    assert "CAUSAL_DIRECT_COOLDOWN=20\n" in bn.ENV
+    assert "CAUSAL_LLM_TOTAL_CALLS=" in bn.ENV
+    assert "SWARM_DEADLINE_S=" in bn.ENV          # fecha o scorecard antes do kill de 9h
+    assert "CAUSAL_MAX_ACTIONS=100000" not in bn.ENV   # reativa early-exit na eval

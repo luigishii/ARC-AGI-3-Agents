@@ -39,3 +39,25 @@ silencioso.
 - `phase2_stats.gk_src` = `llm:X` nos jogos desconhecidos / modo cego.
 - Comparar `levels_completed` em `CAUSAL_GK=1` vs `CAUSAL_GK=0`: a diferença é o que a
   tabela dá e a eval NÃO dá; o valor em modo cego é a previsão honesta da submissão.
+
+## Adendo (mesma sessão) — pré-submissão com gpt-oss-120b
+
+7. **Cap global de chamadas** `CAUSAL_LLM_TOTAL_CALLS` (`agent._LLM_TOTAL`, por processo,
+   todas as threads) + `_take_llm_call(per_game)` em todos os call sites; a classe e os
+   loops de reward/f_τ só respeitam o global. Diag `llm_total_calls`.
+8. **Deadline global** `SWARM_DEADLINE_S` (desde o início do `Swarm.main`, inclui o load do
+   modelo): paralelo → `join(timeout=restante)` e `stop_requested` em todos; sequencial →
+   timeout por jogo limitado ao restante e pula jogos após o prazo.
+9. **Papéis inferidos no prompt do direct** (`GAME CLASS`/`AVATAR COLOR`/`TARGET COLOR`/
+   `CLICKABLE COLORS`).
+10. **Budget por classe** em jogo não-visto sem env/tabela (`_CLASS_BUDGETS`, click-only=80).
+11. **Esforço por chamada**: `complete(prompt, effort=None)` em todos os clients;
+    `resolve_effort`; direct usa `CAUSAL_DIRECT_EFFORT` (default `low`), classe/reward usam
+    `CAUSAL_EFFORT`. `agent._complete` só passa `effort=` se o client aceita.
+12. **Env da submissão** alinhado ao gpt-oss: `CAUSAL_MAX_ACTIONS=1500` (era 100000; reativa
+    early-exit), `CAUSAL_LLM_MAX_CALLS=4`, `CAUSAL_LLM_DEFER=50`, `CAUSAL_DIRECT_COOLDOWN=20`,
+    `CAUSAL_LLM_TOTAL_CALLS=600`, `CAUSAL_DIRECT_EFFORT=low`, `SWARM_DEADLINE_S=30000`.
+
+**Validação ao vivo (API pública, sem LLM, 120 ações):** vc33 cruzou o **nível 1** tanto com
+a tabela (`gk_src=table:C`, level-up na ação 24) quanto em **modo cego** (`gk_src=None`,
+ação 36). O clickmap genérico transfere; o nível 2 não saiu em 120 ações.
