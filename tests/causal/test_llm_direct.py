@@ -19,7 +19,7 @@ def test_direct_prompt_lists_available():
 
 def test_direct_prompt_shows_objects():
     p = build_direct_prompt(_scene(_obj(id=0, color=3)), {"available": ["ACTION1"]})
-    assert "OBJETOS" in p
+    assert "OBJECTS" in p
     assert "color=3" in p
 
 
@@ -27,15 +27,15 @@ def test_direct_prompt_last_feedback_present():
     p = build_direct_prompt(_scene(_obj()), {"available": ["ACTION1"]},
                             {"key": "ACTION2", "effect": "structural"})
     assert "ACTION2" in p and "structural" in p
-    assert "PROGRESSO" in p
+    assert "PROGRESS" in p
 
 
 def test_direct_prompt_last_omitted_when_none():
     p = build_direct_prompt(_scene(_obj()), {"available": ["ACTION1"]}, None)
-    assert "ultima acao" not in p.lower()
+    assert "last action" not in p.lower()
     p2 = build_direct_prompt(_scene(_obj()), {"available": ["ACTION1"]},
                              {"key": None, "effect": None})
-    assert "ultima acao" not in p2.lower()
+    assert "last action" not in p2.lower()
 
 
 def test_direct_prompt_asks_single_action():

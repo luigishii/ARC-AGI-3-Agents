@@ -55,6 +55,53 @@ _GAME_BUDGETS: dict[str, int] = {
 # Fracao do budget apos a qual, sem level_up, o agente desiste (early-exit).
 EARLY_EXIT_FRAC = 0.65
 
+# Conhecimento decodificado dos 25 jogos (docs/GAMES.md). Injeta priors no agente:
+# avatar_color/target_color → grounded reward + navigate sem adivinhar.
+# click_colors → filtra cliques (so clica objetos interativos). None = sem filtro.
+# game_class → A=nav, B=sokoban, C=manipulacao, D=pintura, E=sequencia, F=fluxo.
+_GAME_KNOWLEDGE: dict[str, dict] = {
+    # A. Navegacao avatar→alvo
+    "dc22": {"avatar": 9, "target": None, "click": {9, 10, 8}, "cls": "A"},
+    "g50t": {"avatar": 9, "target": 9, "click": None, "cls": "A"},
+    "tu93": {"avatar": 9, "target": 14, "click": None, "cls": "A"},
+    "sc25": {"avatar": 10, "target": 9, "click": {12}, "cls": "A"},
+    "ls20": {"avatar": 12, "target": 5, "click": None, "cls": "A"},
+    "m0r0": {"avatar": 10, "target": None, "click": {9}, "cls": "A"},
+    # B. Sokoban / empurrar-blocos
+    "ka59": {"avatar": None, "target": None, "click": None, "cls": "B"},
+    "wa30": {"avatar": 14, "target": 2, "click": None, "cls": "B"},
+    "su15": {"avatar": None, "target": None, "click": None, "cls": "B"},
+    # C. Manipulacao/posicionamento
+    "vc33": {"avatar": None, "target": None, "click": {9, 1}, "cls": "C"},
+    "ar25": {"avatar": None, "target": 11, "click": None, "cls": "C"},
+    "cn04": {"avatar": None, "target": None, "click": None, "cls": "C"},
+    "r11l": {"avatar": None, "target": None, "click": {3}, "cls": "C"},
+    "s5i5": {"avatar": None, "target": None, "click": None, "cls": "C"},
+    "lf52": {"avatar": None, "target": None, "click": {14}, "cls": "C"},
+    "lp85": {"avatar": None, "target": None, "click": {8, 14}, "cls": "C"},
+    # D. Pintura
+    "cd82": {"avatar": None, "target": None, "click": None, "cls": "D"},
+    "ft09": {"avatar": None, "target": None, "click": None, "cls": "D"},
+    "re86": {"avatar": None, "target": None, "click": None, "cls": "D"},
+    # E. Sequencia/validar
+    "sb26": {"avatar": None, "target": None, "click": None, "cls": "E"},
+    "tr87": {"avatar": None, "target": None, "click": None, "cls": "E"},
+    "sk48": {"avatar": None, "target": None, "click": None, "cls": "E"},
+    "tn36": {"avatar": None, "target": None, "click": {1, 5}, "cls": "E"},
+    # F. Fluxo
+    "sp80": {"avatar": None, "target": None, "click": {8, 15}, "cls": "F"},
+    # Desconhecido
+    "bp35": {"avatar": None, "target": None, "click": None, "cls": "?"},
+}
+
+
+def _game_knowledge(game_id: str) -> dict:
+    """Retorna prior do jogo por prefixo, ou dict vazio."""
+    for prefix, info in _GAME_KNOWLEDGE.items():
+        if game_id.startswith(prefix):
+            return info
+    return {}
+
 
 def _obj_state(o) -> dict:
     """Estado mecânico serializável de um objeto p/ as regras f_τ (x=col, y=row)."""
@@ -141,6 +188,8 @@ class CausalObjectAgent(Agent):
                 (b for prefix, b in _GAME_BUDGETS.items() if gid.startswith(prefix)),
                 type(self).MAX_ACTIONS,
             )
+        # Game knowledge: prior decodificado das mecanicas (docs/GAMES.md).
+        self._gk = _game_knowledge(getattr(self, "game_id", ""))
         self._model = CausalModel()
         self._novelty = NoveltyModel()
         self._tmodel = TransitionModel()
@@ -403,7 +452,8 @@ class CausalObjectAgent(Agent):
         if self.MAX_ACTIONS not in (0, float("inf")):
             budget_frac = max(0.0, 1 - self.action_counter / self.MAX_ACTIONS)
         avail = latest_frame.available_actions or [GameAction.ACTION1]
-        cands = candidates(scene, avail, clickmap=self._clickmap)
+        cands = candidates(scene, avail, clickmap=self._clickmap,
+                           click_colors=self._gk.get("click"))
         keymap = {c.key: c for c in cands}
         moves = self._move.moves()
         # (1) consulta esparsa ao LLM: só se ligado, sem meta ativa e passado o cooldown.
@@ -502,6 +552,15 @@ class CausalObjectAgent(Agent):
                         cand = keymap[k]
                         break
         # (3) navigate: avatar→alvo via MovementModel (heuristico, multi-target)
+        # Game knowledge: se sabemos o avatar_color, força o avatar_id no MovementModel
+        # antes que ele precise de varias observacoes pra aprender sozinho.
+        if (cand is None and self._nav_on and self._gk.get("avatar") is not None
+                and self._move.avatar_id() is None):
+            ac = self._gk["avatar"]
+            for o in scene.objects:
+                if o.color == ac and o.size <= 100:
+                    self._move.avatar_counts[o.id] = self._move.avatar_counts.get(o.id, 0) + 10
+                    break
         if cand is None and self._nav_on:
             nk = navigate(scene, self._move, reached_ids=self._reached_ids)
             if nk is not None:
@@ -696,12 +755,6 @@ class CausalObjectAgent(Agent):
         if self._llm_calls >= self._llm_max:
             return None
         if self.action_counter < self._llm_defer:
-            return None
-        # Click-only: LLM nao sabe raciocinar sobre "clique no pixel X,Y"
-        # — so gasta ~60s por chamada com 0 hits. Pula e deixa o policy decidir.
-        has_keyboard = any(not (a if isinstance(a, GameAction)
-                                else GameAction.from_id(a)).is_complex() for a in avail)
-        if not has_keyboard:
             return None
         self._since_direct = 0
         self._llm_calls += 1
@@ -943,6 +996,26 @@ class CausalObjectAgent(Agent):
         # um alvo (raro/compacto) sao conhecidos, usa -manhattan(avatar,alvo) por cor.
         # A vitoria no AGI-3 e sempre espacial (docs/GAMES.md), nunca contagem-de-cor.
         if self._grounded:
+            # PRIORIDADE 0: game knowledge — se sabemos avatar+target, usa direto.
+            # Nao precisa esperar MovementModel aprender; injeta no frame 1.
+            gk = self._gk
+            if gk.get("avatar") is not None and gk.get("target") is not None:
+                self._reward_fn = grounded_reward_fn(gk["avatar"], gk["target"])
+                self._reward_src = f"gk:-dist(cor{gk['avatar']}->cor{gk['target']})"
+                return True
+            # Game knowledge sem target explicito mas com avatar: usa avatar→nearest
+            if gk.get("avatar") is not None:
+                objs = list(scene.objects)
+                ac = gk["avatar"]
+                # Acha o alvo mais provavel: objeto raro, compacto, cor != avatar
+                others = [o for o in objs if o.color != ac and o.size <= 100]
+                if others:
+                    from collections import Counter
+                    freq = Counter(o.color for o in objs)
+                    tgt = min(others, key=lambda o: (freq[o.color], o.size))
+                    self._reward_fn = grounded_reward_fn(ac, tgt.color)
+                    self._reward_src = f"gk:-dist(cor{ac}->cor{tgt.color})"
+                    return True
             # Template reward (mais precisa): usa o grid vencedor do nivel anterior
             if self._win_template is not None:
                 self._reward_fn = grounded_template_reward_fn(self._win_template)

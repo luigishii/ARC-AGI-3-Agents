@@ -22,10 +22,12 @@ _INSTRUCTION = (
 )
 
 _DIRECT_INSTRUCTION = (
-    "Escolha a PROXIMA acao imediata (uma so) para fazer progresso. Responda "
-    "APENAS um JSON, sem markdown, sem prosa:\n"
-    '{"type":"press","action":"ACTIONk"}   (k da lista disponivel)\n'
-    '{"type":"click_cell","gx":0,"gy":0}   (gx,gy em 0..5 = celula do grid 6x6)'
+    "Choose the NEXT immediate action to make progress. "
+    "Reply with ONLY a JSON object, no markdown, no prose:\n"
+    '{"type":"press","action":"ACTIONk"}   (k from AVAILABLE list)\n'
+    '{"type":"click_cell","gx":0,"gy":0}   (gx,gy in 0..5 = 6x6 grid cell)\n'
+    "Pick the action that best progresses toward the goal. "
+    "Do NOT repeat an action that produced no visible change."
 )
 
 
@@ -277,39 +279,52 @@ def grid_to_ascii(grid) -> str:
         return ""
 
 
+def grid_to_ascii_compact(grid, factor=4) -> str:
+    """Grid compacto: downsample por factor (64x64 -> 16x16). Reduz ~4x os tokens."""
+    if grid is None:
+        return ""
+    try:
+        rows = []
+        for ry in range(0, len(grid), factor):
+            row = []
+            for rx in range(0, len(grid[0]), factor):
+                row.append(_HEX[int(grid[ry][rx]) & 15])
+            rows.append("".join(row))
+        return "\n".join(rows)
+    except (TypeError, IndexError):
+        return ""
+
+
 def build_direct_prompt(scene, dyn, last=None, context=None) -> str:
-    """Prompt orientado a ACAO (distinto de build_prompt, orientado a META): serializa
-    o GRID ASCII (espacial) + a cena objeto-centrica + AVAILABLE_ACTIONS + feedback da
-    ultima acao, e pede UMA proxima acao. O parsing reusa parse_goal; exec reusa execute_goal.
-    context: dict opcional com info estrategica (levels, actions, reward_src, moves)."""
+    """Prompt orientado a ACAO: grid compacto + objetos + available + feedback.
+    Tudo em ingles (melhor pra Qwen3-32B)."""
     dyn = dyn or {}
     ctx = context or {}
-    lines = ["GRID (1 char = cor 0-f; linha = y de cima->baixo, coluna = x):",
-             grid_to_ascii(getattr(scene, "grid", None)),
-             f"OBJETOS ({len(scene.objects)}):"]
-    for o in scene.objects:
+    lines = ["GRID (16x16 downsampled, 1 char = color 0-f):",
+             grid_to_ascii_compact(getattr(scene, "grid", None)),
+             f"OBJECTS ({len(scene.objects)}):"]
+    for o in list(scene.objects)[:6]:   # top 6 objetos (reduz tokens)
         lines.append(
-            f"  id={o.id} color={o.color} centroid={o.centroid} "
-            f"size={o.size} bbox={o.bbox}"
+            f"  id={o.id} color={o.color} pos=({int(round(o.centroid[1]))},{int(round(o.centroid[0]))}) "
+            f"size={o.size}"
         )
-    lines.append(f"AVAILABLE_ACTIONS: {dyn.get('available', [])}   (use SO essas)")
-    # Contexto estrategico: ajuda o LLM a entender o estado do jogo
+    lines.append(f"AVAILABLE_ACTIONS: {dyn.get('available', [])}   (use ONLY these)")
     if ctx:
-        lines.append(f"ESTADO: acao #{ctx.get('step', '?')}, "
-                     f"niveis completados={ctx.get('levels', 0)}, "
+        lines.append(f"STATE: step #{ctx.get('step', '?')}, "
+                     f"levels_done={ctx.get('levels', 0)}, "
                      f"reward={ctx.get('reward_src', '?')}")
         if ctx.get("moves"):
-            lines.append(f"TECLAS APRENDIDAS: {ctx['moves']}")
+            lines.append(f"KEYBOARD MAP: {ctx['moves']}")
         if ctx.get("productive_colors"):
-            lines.append(f"CORES PRODUTIVAS (resolveram niveis): {ctx['productive_colors']}")
+            lines.append(f"PRODUCTIVE COLORS (solved levels): {ctx['productive_colors']}")
         if ctx.get("stale"):
-            lines.append(f"AVISO: agente preso ({ctx['stale']} acoes sem efeito). "
-                         "Tente algo DIFERENTE do que foi tentado.")
+            lines.append(f"WARNING: agent stuck ({ctx['stale']} actions with no effect). "
+                         "Try something DIFFERENT.")
     if last and last.get("key"):
-        eff = last.get("effect") or "nenhuma mudanca"
+        eff = last.get("effect") or "no visible change"
         lines.append(
-            f"Sua ultima acao {last['key']} produziu: {eff}. Escolha a PROXIMA "
-            "acao que faz PROGRESSO; NAO repita uma acao que nao mudou nada."
+            f"Last action {last['key']} produced: {eff}. Choose the NEXT "
+            "action that makes PROGRESS; do NOT repeat actions with no effect."
         )
     lines.append(_DIRECT_INSTRUCTION)
     return "\n".join(lines)

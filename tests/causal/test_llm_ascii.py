@@ -1,6 +1,6 @@
 import numpy as np
 
-from agents.causal.llm import build_direct_prompt, grid_to_ascii
+from agents.causal.llm import build_direct_prompt, grid_to_ascii, grid_to_ascii_compact
 from agents.causal.perception import parse
 
 
@@ -19,4 +19,5 @@ def test_build_direct_prompt_includes_ascii_grid():
     scene = parse(grid.tolist())
     p = build_direct_prompt(scene, {"available": ["ACTION6"]})
     assert "GRID" in p                       # cabecalho do grid
-    assert grid_to_ascii(scene.grid) in p    # o desenho ASCII do grid entra no prompt
+    # Grid compacto (downsampled) esta no prompt
+    assert grid_to_ascii_compact(scene.grid) in p

@@ -72,7 +72,10 @@ def _object_cells(scene) -> set:
     return occ
 
 
-def candidates(scene, available_actions, clickmap: bool = False) -> list:
+def candidates(scene, available_actions, clickmap: bool = False,
+               click_colors: set | None = None) -> list:
+    """Gera candidatos de acao. click_colors: se fornecido, SO gera candidatos de
+    clique em objetos dessas cores (game knowledge). None = sem filtro extra."""
     out = []
     occ = _object_cells(scene)
     for a in available_actions:
@@ -81,12 +84,13 @@ def candidates(scene, available_actions, clickmap: bool = False) -> list:
             out.append(Candidate(action, None, None, action.name, False))
         elif clickmap:
             # Object-centric: candidate no CENTROID de cada objeto pequeno.
-            # Fix: grid 6x6 cell centers (a cada ~10px) perdem objetos pequenos
-            # que caem entre os pontos — o agente so via background.
             seen_keys = set()
             for o in scene.objects:
                 if o.size > 100:
                     continue          # HUD/parede/fundo: nem gera candidato
+                # Game knowledge: se click_colors definido, so clica nessas cores.
+                if click_colors is not None and o.color not in click_colors:
+                    continue
                 x = int(round(o.centroid[1]))   # col
                 y = int(round(o.centroid[0]))   # row
                 gx, gy = cell_of(x, y)

@@ -90,10 +90,9 @@ def test_direct_skips_persistent_goal(monkeypatch):
 
 
 def test_direct_click_cell(monkeypatch):
-    # Click-only (ACTION6 only): _direct_decide pula (LLM nao sabe pixel coords).
-    # O agente resolve via cover/policy, direct nao dispara.
+    # Click-only (ACTION6 only): direct agora TENTA (gate removido).
     a = _agent(monkeypatch, CAUSAL_DIRECT="1")
     a._llm = _Fake('{"type":"click_cell","gx":2,"gy":3}')
     act = a.choose_action([], _Frame(_grid(), available=[GameAction.ACTION6]))
     assert act is not None
-    assert a.phase2_stats()["direct_calls"] == 0   # bloqueado: click-only
+    assert a.phase2_stats()["direct_calls"] == 1
