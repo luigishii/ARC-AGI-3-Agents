@@ -2,10 +2,10 @@ from arcengine import GameAction
 from agents.causal.policy import Candidate, action_key
 
 
-def test_candidate_has_five_fields():
+def test_candidate_has_six_fields():
     c = Candidate(GameAction.ACTION1, None, None, "ACTION1", False)
     assert c.has_object is False
-    assert c._fields == ("action", "x", "y", "key", "has_object")
+    assert c._fields == ("action", "x", "y", "key", "has_object", "obj_size")
 
 
 def test_action_key_simple_is_name():

@@ -26,11 +26,14 @@ def _grid():
 
 
 def _agent(monkeypatch, **env):
+    env.setdefault("CAUSAL_LLM_DEFER", "0")
+    env.setdefault("CAUSAL_MAX_ACTIONS", "10000")
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     a = CausalObjectAgent.__new__(CausalObjectAgent)
-    a.action_counter = 0
-    a.MAX_ACTIONS = 80
+    a.action_counter = 10     # pula sweep de tipos
+    a.game_id = "test"
+    a.MAX_ACTIONS = 10000
     a._init_causal_state()
     return a
 

@@ -36,6 +36,25 @@ TYPE_BUF_MAX = 64         # transições guardadas por tipo
 TYPE_COOLDOWN = 8         # cadência esparsa da síntese de regra de tipo
 REWARD_DEFER_MAX = 4      # ticks elegíveis a esperar o avatar antes de sintetizar a reward
 
+# Budget dinamico por classe de jogo. Click-only resolve L0 em 5-13 acoes,
+# nao precisa de 200. Navegacao simples ~30 acoes. Complexos podem gastar mais.
+_GAME_BUDGETS: dict[str, int] = {
+    # Click-only (L0 curto, ~20fps): budget enxuto
+    "vc33": 80, "tn36": 80, "lp85": 80, "r11l": 80, "s5i5": 80,
+    "ft09": 80, "su15": 100, "lf52": 100,
+    # Navegacao avatar→alvo (teclado simples)
+    "dc22": 150, "g50t": 150, "tu93": 150, "sc25": 150, "ls20": 150, "m0r0": 150,
+    # Sokoban / manipulacao (mecanica mais complexa)
+    "ka59": 200, "wa30": 200, "ar25": 200, "cn04": 200,
+    # Sequencia/pintura/fluxo (precisa de mais exploracao)
+    "sb26": 200, "tr87": 200, "sk48": 200, "cd82": 200, "re86": 200, "sp80": 200,
+    # Desconhecido
+    "bp35": 150,
+}
+
+# Fracao do budget apos a qual, sem level_up, o agente desiste (early-exit).
+EARLY_EXIT_FRAC = 0.65
+
 
 def _obj_state(o) -> dict:
     """Estado mecânico serializável de um objeto p/ as regras f_τ (x=col, y=row)."""
@@ -112,7 +131,16 @@ class CausalObjectAgent(Agent):
         self._init_causal_state()
 
     def _init_causal_state(self) -> None:
-        self.MAX_ACTIONS = int(os.environ.get("CAUSAL_MAX_ACTIONS", type(self).MAX_ACTIONS))
+        # Budget dinamico: usa mapeamento por jogo se env var nao foi setada explicitamente.
+        env_budget = os.environ.get("CAUSAL_MAX_ACTIONS")
+        if env_budget is not None:
+            self.MAX_ACTIONS = int(env_budget)
+        else:
+            gid = getattr(self, "game_id", "")
+            self.MAX_ACTIONS = next(
+                (b for prefix, b in _GAME_BUDGETS.items() if gid.startswith(prefix)),
+                type(self).MAX_ACTIONS,
+            )
         self._model = CausalModel()
         self._novelty = NoveltyModel()
         self._tmodel = TransitionModel()
@@ -196,6 +224,9 @@ class CausalObjectAgent(Agent):
         # Garante que TODOS os jogos iniciam rapidos (~20fps) e so usam LLM quando
         # as heuristicas (navigate, cover, grounded) ja tiveram chance de agir.
         self._llm_defer = int(os.environ.get("CAUSAL_LLM_DEFER", "50"))
+        self._llm_defer_initial = self._llm_defer
+        # Adaptive defer: se apos N acoes sem nenhum efeito positivo, abre LLM mais cedo.
+        self._no_effect_streak = 0    # acoes consecutivas sem efeito util
         # Burst tracker: conta acoes distintas com efeito recente → dispara ACTION5 (validate)
         self._burst_count = 0          # acoes consecutivas com efeito != none
         self._burst_distinct = set()   # keys distintas no burst atual
@@ -214,7 +245,15 @@ class CausalObjectAgent(Agent):
         self._last_pixel_delta = 0      # pixels que mudaram na ultima acao
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
-        return latest_frame.state is GameState.WIN
+        if latest_frame.state is GameState.WIN:
+            return True
+        # Early-exit: se gastou 65%+ do budget sem nenhum level_up, desiste.
+        # Libera tempo para os proximos jogos na fila sequencial.
+        levels = latest_frame.levels_completed or 0
+        if (levels == 0 and self.MAX_ACTIONS > 0
+                and self.action_counter >= self.MAX_ACTIONS * EARLY_EXIT_FRAC):
+            return True
+        return False
 
     def cleanup(self, scorecard=None):
         if os.environ.get("CAUSAL_PRIOR_SAVE"):
@@ -332,8 +371,10 @@ class CausalObjectAgent(Agent):
                     self._stale_count += 1
                     self._burst_count = 0
                     self._burst_distinct.clear()
+                    self._no_effect_streak += 1
                 else:
                     self._stale_count = 0
+                    self._no_effect_streak = 0
                     self._burst_count += 1
                     self._burst_distinct.add(self._last_key)
                     # Track keys que causaram efeito visivel
@@ -348,6 +389,14 @@ class CausalObjectAgent(Agent):
             if self._pending_log is not None:
                 self._instr.log(**self._pending_log, actual=actual)
                 self._pending_log = None
+
+        # Adaptive LLM defer: se 20+ acoes sem efeito e LLM ainda bloqueado,
+        # reduz defer pela metade (min 10). Nao adianta queimar heuristicas que
+        # claramente nao funcionam — abre o LLM mais cedo pra tentar algo diferente.
+        if (self._no_effect_streak >= 20 and self._llm_on
+                and self.action_counter < self._llm_defer
+                and self._llm_defer > 10):
+            self._llm_defer = max(10, self._llm_defer // 2)
 
         # decide a próxima ação
         budget_frac = 1.0
@@ -967,8 +1016,13 @@ class CausalObjectAgent(Agent):
     def phase2_stats(self) -> dict:
         """B: telemetria diagnosticável no log do Kaggle."""
         return {
+            "game_id": getattr(self, "game_id", "?"),
+            "max_actions": self.MAX_ACTIONS,
+            "actions_used": self.action_counter,
             "llm_kind": self._llm_kind,
             "llm_calls": self._llm_calls,
+            "llm_defer_final": self._llm_defer,
+            "llm_defer_initial": self._llm_defer_initial,
             "n_types": len(self._type_buffer),
             "n_rules": len(self._typed.sources),
             "reward_learned": self._reward_fn is not None,
@@ -987,6 +1041,7 @@ class CausalObjectAgent(Agent):
             "eta_rows": len(self._etable.rows),
             "productive_colors": sorted(self._productive_colors),
             "stale_count": self._stale_count,
+            "no_effect_streak": self._no_effect_streak,
         }
 
     def _rule_error(self, src) -> str:

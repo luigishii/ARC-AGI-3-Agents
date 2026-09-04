@@ -19,13 +19,18 @@ def _fake_repo(tmp_path):
     pkg.mkdir(parents=True)
     for m in bn.MODULES:
         (pkg / m).write_text(f"# {m}\nX = 1\n")
+    # read_sources tambem embarca agent.py e swarm.py
+    (tmp_path / "agents" / "agent.py").write_text("# agent.py\n")
+    (tmp_path / "agents" / "swarm.py").write_text("# swarm.py\n")
     return str(tmp_path), bn
 
 
 def test_read_sources_roundtrip_base64(tmp_path):
     root, bn = _fake_repo(tmp_path)
     src = bn.read_sources(root)
-    assert set(src) == {f"agents/causal/{m}" for m in bn.MODULES}
+    expected = {f"agents/causal/{m}" for m in bn.MODULES}
+    expected |= {"agents/agent.py", "agents/swarm.py"}
+    assert set(src) == expected
     decoded = base64.b64decode(src["agents/causal/agent.py"]).decode()
     assert decoded == "# agent.py\nX = 1\n"
 

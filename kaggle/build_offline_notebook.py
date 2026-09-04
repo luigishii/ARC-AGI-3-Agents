@@ -21,18 +21,19 @@ OFFLINE_ENV = (
     "OPERATION_MODE=offline\n"
     "RECORDINGS_DIR=/kaggle/working/recordings\n"
     "CAUSAL_PRIOR=" + REPO + "/agents/causal/prior.json\n"
-    "CAUSAL_MAX_ACTIONS=200\n"
+    # CAUSAL_MAX_ACTIONS: NAO setado — budget dinamico por jogo (agent.py _GAME_BUDGETS).
+    # Click-only=80, navegacao=150, complexo=200. Early-exit a 65% sem level_up.
     "CAUSAL_LLM=1\n"
     "CAUSAL_LLM_MAX_CALLS=3\n"     # max 3 chamadas LLM por jogo (~90s max)
-    "CAUSAL_LLM_DEFER=50\n"        # 50 acoes heuristicas antes de permitir LLM
+    "CAUSAL_LLM_DEFER=50\n"        # 50 acoes heuristicas antes de LLM (adaptive: reduz se preso)
     "CAUSAL_TYPED=1\n"
     "CAUSAL_ETA=1\n"
     "CAUSAL_IW=1\n"
     "CAUSAL_RPROG=1\n"       # progresso model-free por reward real (Lever B')
     "CAUSAL_COVER=1\n"
     "CAUSAL_CLICKMAP=1\n"
-    "CAUSAL_GROUNDED=1\n"       # exploração por cobertura + anti-fixação
-    "CAUSAL_FIX=1\n"        # guarda global anti-fixação
+    "CAUSAL_GROUNDED=1\n"       # reward grounded (manhattan, multi-align, pattern)
+    "CAUSAL_FIX=1\n"        # guarda global anti-fixacao
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
     "CAUSAL_DIRECT_COOLDOWN=20\n"  # cooldown entre chamadas direct (default 2 -> 20)
     "CAUSAL_EFFORT=medium\n"  # gpt-oss: esforco de raciocinio (low|medium|high) no Harmony
@@ -118,7 +119,16 @@ def build_offline_notebook(sources):
         f"os.system('cd {REPO} && MPLBACKEND=agg python main.py --agent causalobject')\n"
     )
     cell2 = (
-        "import glob\n"
+        "import glob, json\n"
+        "# Diagnostico do Swarm: resumo por-jogo (sequencial + priorizado)\n"
+        "for p in sorted(glob.glob('/kaggle/working/**/swarm_diagnostics.json', recursive=True)):\n"
+        "    print('=== SWARM DIAGNOSTICS ===')\n"
+        "    d = json.loads(open(p).read())\n"
+        "    print(f\"Total: {d['total_levels']}L em {d['total_time_s']}s ({d['total_games']} jogos)\")\n"
+        "    for g in d.get('games', []):\n"
+        "        print(f\"  {g['game_id']:6s} | {g['levels']}L | {g['actions']:3d} acts | \"\n"
+        "              f\"{g['time_s']:6.1f}s | {g['fps']:6.2f} fps\")\n"
+        "# Diagnostico causal por-agente\n"
         "for p in sorted(glob.glob('/kaggle/working/**/causal_phase2.json', recursive=True)):\n"
         "    print('=== causal_phase2.json ===')\n"
         "    print(open(p).read())\n"
