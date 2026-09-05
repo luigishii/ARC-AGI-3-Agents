@@ -103,9 +103,10 @@ def test_env_has_fix():
     assert "CAUSAL_FIX=1" in b.ENV
 
 
-def test_env_has_direct():
+def test_env_direct_off():
+    # 05/set: direct_hits=0 em 25 jogos com o 120B -> desligado na submissao
     import kaggle.build_notebook as b
-    assert "CAUSAL_DIRECT=1" in b.ENV
+    assert "CAUSAL_DIRECT=0" in b.ENV
 
 
 def test_env_has_winreward():
@@ -130,9 +131,11 @@ def test_modules_cover_all_relative_imports():
     assert not missing, f"modulos importados mas nao embarcados: {sorted(missing)}"
 
 
-def test_env_has_class_infer():
+def test_env_llm_off_for_submission():
+    # 05/set: cego com LLM = 4 niveis vs 5 sem -> submissao = pilha heuristica pura
     bn = _load_module()
-    assert "CAUSAL_CLASS=1\n" in bn.ENV
+    assert "CAUSAL_LLM=0\n" in bn.ENV
+    assert "CAUSAL_CLASS=0\n" in bn.ENV
 
 
 def test_model_path_discovered_by_glob(tmp_path):

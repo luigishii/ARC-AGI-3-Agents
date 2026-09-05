@@ -69,7 +69,9 @@ ENV = (
     "RECORDINGS_DIR=/kaggle/working/server_recording\n"
     "CAUSAL_PRIOR=" + REPO + "/agents/causal/prior.json\n"
     "CAUSAL_MAX_ACTIONS=1500\n"    # reativa early-exit (65% sem level-up) na eval; era 100000
-    "CAUSAL_LLM=1\n"
+    # 05/set: run cego com gpt-oss-120b = 4 niveis vs 5 sem LLM (classe acerta 7/24 e
+    # sobrepoe a heuristica; direct_hits=0 nos 25). Submissao = pilha heuristica pura.
+    "CAUSAL_LLM=0\n"
     # gpt-oss ~30s/chamada + Swarm PARALELO serializado por lock -> sem estes caps a
     # submissao inteira fica na fila do LLM (a de 0.08 usava Qwen3-32B a 1.1s).
     "CAUSAL_LLM_MAX_CALLS=4\n"      # por jogo
@@ -87,8 +89,8 @@ ENV = (
     "CAUSAL_GROUNDED=1\n"       # exploração por cobertura + anti-fixação
     "CAUSAL_WINREWARD=1\n"      # reward validada pela 1a vitoria + rprog acima do 2phase
     "CAUSAL_FIX=1\n"        # guarda global anti-fixação
-    "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
-    "CAUSAL_CLASS=1\n"      # 1 chamada/jogo: LLM classifica o jogo (A-F) + papeis (jogo nao-visto)
+    "CAUSAL_DIRECT=0\n"     # direct_hits=0/25 jogos no run cego de 05/set
+    "CAUSAL_CLASS=0\n"      # classe LLM acertou 7/24 e custou vc33 L2 + lp85 L1 (05/set)
     "CAUSAL_EFFORT=medium\n"  # gpt-oss: esforco de raciocinio (low|medium|high) no Harmony
     "HF_HUB_OFFLINE=1\n"       # kernels/hub sem rede: le so o cache local
     "TRANSFORMERS_OFFLINE=1\n"
