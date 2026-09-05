@@ -30,6 +30,7 @@ from .goals import (compile_reward, static_reward_check, goal_fn_from_reward,
                     grounded_multi_reward_fn, grounded_pattern_reward_fn,
                     grounded_pair_reward_fn, grounded_template_reward_fn,
                     grounded_diversity_reward_fn, grounded_count_reward_fn)
+from .winselect import select_win_reward
 
 QUERY_COOLDOWN = 15
 GOAL_FAIL_MAX = 3
@@ -385,7 +386,13 @@ class CausalObjectAgent(Agent):
         self._cover_on = os.environ.get("CAUSAL_COVER", "0") != "0"
         self._clickmap = os.environ.get("CAUSAL_CLICKMAP", "0") != "0"
         self._grounded = os.environ.get("CAUSAL_GROUNDED", "0") != "0"
-        self._fix_run = 0             # repetições consecutivas da MESMA key escolhida
+        # Lever "reward validada pela vitoria" (spec 2026-09-05): apos o 1o level-up,
+        # escolhe entre as rewards grounded a que EXPLICA a vitoria e deixa o rprog
+        # dirigir acima do 2phase. Default off (caminho off byte-identico).
+        self._winreward_on = os.environ.get("CAUSAL_WINREWARD", "0") != "0"
+        self._level_states: list = []      # estados decisao->decisao do nivel corrente
+        self._win_reward = None            # (nome, fn, rho) | None
+        self._fix_run = 0            # repetições consecutivas da MESMA key escolhida
         self._fix_breaks = 0          # diag: vezes que o guarda quebrou uma fixação
         self._fix_on = os.environ.get("CAUSAL_FIX", "0") != "0"
         self._fix_k = int(os.environ.get("CAUSAL_FIX_K", "3"))
@@ -551,6 +558,11 @@ class CausalObjectAgent(Agent):
                 self._reward_upgradable = False
                 self._reached_ids.clear()   # novo nivel → alvos resetam
                 win_scene = parse(wg, hud_mask=self._hud.mask())
+                if self._winreward_on:
+                    win_state = [(o.shape_hash, _obj_state(o)) for o in win_scene.objects]
+                    self._win_reward = select_win_reward(
+                        self._win_reward_candidates(win_scene), self._level_states, win_state)
+                    self._level_states = []
                 self._novelty.record_goal_anchor(state_signature(win_scene))
                 self._goal = None                     # nível cumprido → re-planejar
                 self._last_effect_kind = None
@@ -559,6 +571,9 @@ class CausalObjectAgent(Agent):
                 self._level_seq.append(self._last_key)
                 # transição DECISÃO→DECISÃO: alimenta retrodição + f_τ/η + movimento + forward
                 self._buffer.append((self._prev_scene, self._last_key, actual.kind))
+                if self._winreward_on and len(self._level_states) < 400:
+                    self._level_states.append(
+                        [(o.shape_hash, _obj_state(o)) for o in self._prev_scene.objects])
                 # Pixel delta override: se CausalModel diz "none" mas >=5 pixels
                 # mudaram, a acao TEVE efeito (UI state change em r11l/ft09/s5i5).
                 # Usa "pixel" como effect_kind pra ativar two-phase e burst.
@@ -1380,6 +1395,27 @@ class CausalObjectAgent(Agent):
         states.append([(o.shape_hash, _obj_state(o)) for o in scene.objects])
         return states
 
+    def _win_reward_candidates(self, win_scene) -> list:
+        """Rewards grounded candidatas a explicar a vitoria (nomes estaveis p/ telemetria)."""
+        cands = [("multi-align", grounded_multi_reward_fn()),
+                 ("pattern", grounded_pattern_reward_fn()),
+                 ("pair", grounded_pair_reward_fn()),
+                 ("count", grounded_count_reward_fn()),
+                 ("diversity", grounded_diversity_reward_fn())]
+        aid = self._move.avatar_id()
+        objs = list(win_scene.objects)
+        avatar_idx = next((i for i, o in enumerate(objs) if o.id == aid), None)
+        if avatar_idx is not None:
+            bg = _background_colors(win_scene)
+            tidx = _pick_target(objs, avatar_idx, limit=None,
+                                exclude_ids=self._move.avatar_parts(), bg_colors=bg)
+            if tidx is not None:
+                av, tg = objs[avatar_idx], objs[tidx]
+                cands.append(("nav", grounded_reward_fn(av.color, tg.color,
+                                                        avatar_size=av.size,
+                                                        target_size=tg.size)))
+        return cands
+
     def _adopt_grounded(self, fn, src, scene) -> bool:
         """Adota a reward grounded SÓ se ela passar a mesma trava comportamental da
         reward do LLM (nada de falso-positivo nem de escalar constante). Rejeitada ->
@@ -1451,6 +1487,13 @@ class CausalObjectAgent(Agent):
             if gk.get("cls") == "F":
                 self._reward_fn = grounded_pattern_reward_fn()
                 self._reward_src = "gk:pattern(cls=F/fluxo)"
+                return True
+            # Reward VALIDADA pela vitoria (winselect): a candidata que explicou o nivel
+            # anterior (argmax no frame vencedor + gradiente). Tem precedencia sobre o
+            # template, que vira ruido quando o layout do nivel muda.
+            if self._win_reward is not None:
+                name, fn, rho = self._win_reward
+                self._reward_fn, self._reward_src = fn, f"win:{name}(rho={rho:.2f})"
                 return True
             # Template reward (mais precisa): usa o grid vencedor do nivel anterior
             if self._win_template is not None:
@@ -1548,6 +1591,8 @@ class CausalObjectAgent(Agent):
             "n_rules": len(self._typed.sources),
             "reward_learned": self._reward_fn is not None,
             "reward_src": self._reward_src,
+            "win_reward": None if self._win_reward is None else self._win_reward[0],
+            "win_rho": None if self._win_reward is None else round(self._win_reward[2], 3),
             "reward_rejected": self._reward_rejected,
             "cover_keys": len(self._cover),
             "fix_breaks": self._fix_breaks,
