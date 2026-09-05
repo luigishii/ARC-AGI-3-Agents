@@ -108,6 +108,28 @@ def test_env_has_direct():
     assert "CAUSAL_DIRECT=1" in b.ENV
 
 
+def test_env_has_winreward():
+    import kaggle.build_notebook as b
+    assert "CAUSAL_WINREWARD=1" in b.ENV
+
+
+def test_modules_cover_all_relative_imports():
+    """Todo `from .X import` dentro de agents/causal/*.py embarcado precisa de X.py em
+    MODULES — senao o notebook no Kaggle quebra no import do pacote inteiro (pegou o
+    winselect.py esquecido em 05/set)."""
+    import re
+    from pathlib import Path
+    import kaggle.build_notebook as b
+    pkg = Path(b.__file__).resolve().parents[1] / "agents" / "causal"
+    missing = set()
+    for m in b.MODULES:
+        src = (pkg / m).read_text(encoding="utf-8")
+        for name in re.findall(r"^from \.(\w+) import", src, flags=re.M):
+            if f"{name}.py" not in b.MODULES:
+                missing.add(f"{m} -> .{name}")
+    assert not missing, f"modulos importados mas nao embarcados: {sorted(missing)}"
+
+
 def test_env_has_class_infer():
     bn = _load_module()
     assert "CAUSAL_CLASS=1\n" in bn.ENV

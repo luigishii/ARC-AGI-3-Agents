@@ -117,6 +117,11 @@ def test_offline_env_has_direct():
     assert "CAUSAL_DIRECT=1" in b.OFFLINE_ENV
 
 
+def test_offline_env_has_winreward():
+    import kaggle.build_offline_notebook as b
+    assert "CAUSAL_WINREWARD=1" in b.OFFLINE_ENV
+
+
 def test_offline_model_path_discovered_by_glob():
     _, cell1 = _run_cell()
     assert "config.json" in cell1

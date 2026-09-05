@@ -33,6 +33,7 @@ OFFLINE_ENV = (
     "CAUSAL_COVER=1\n"
     "CAUSAL_CLICKMAP=1\n"
     "CAUSAL_GROUNDED=1\n"       # reward grounded (manhattan, multi-align, pattern)
+    "CAUSAL_WINREWARD=1\n"      # reward validada pela 1a vitoria + rprog acima do 2phase
     "CAUSAL_FIX=1\n"        # guarda global anti-fixacao
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
     "CAUSAL_DIRECT_COOLDOWN=20\n"  # cooldown entre chamadas direct (default 2 -> 20)

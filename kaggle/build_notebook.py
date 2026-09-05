@@ -11,7 +11,7 @@ MODULES = [
     "__init__.py", "agent.py", "causal_model.py", "hud.py",
     "instrumentation.py", "novelty.py", "perception.py", "perception_strategy.py", "policy.py",
     "transfer.py", "planning.py", "navigate.py", "llm.py", "sandbox.py", "dsl.py", "ranker.py",
-    "ontology.py", "typed_model.py", "iw.py", "goals.py",
+    "ontology.py", "typed_model.py", "iw.py", "goals.py", "winselect.py",
 ]
 
 # Caminho do dataset de pesos do LLM no Kaggle. O usuário anexa o dataset ao
@@ -85,6 +85,7 @@ ENV = (
     "CAUSAL_COVER=1\n"
     "CAUSAL_CLICKMAP=1\n"
     "CAUSAL_GROUNDED=1\n"       # exploração por cobertura + anti-fixação
+    "CAUSAL_WINREWARD=1\n"      # reward validada pela 1a vitoria + rprog acima do 2phase
     "CAUSAL_FIX=1\n"        # guarda global anti-fixação
     "CAUSAL_DIRECT=1\n"     # score-max Lever #2: raciocinio direto passo-a-passo
     "CAUSAL_CLASS=1\n"      # 1 chamada/jogo: LLM classifica o jogo (A-F) + papeis (jogo nao-visto)
