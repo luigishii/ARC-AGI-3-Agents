@@ -168,7 +168,11 @@ def _install_gpt_oss_kernel(kernel_dir) -> bool:
     import sys
     if kernel_dir not in sys.path:
         sys.path.insert(0, kernel_dir)
-    tk = importlib.import_module("triton_kernels")
+    try:
+        tk = importlib.import_module("triton_kernels")
+    except ImportError as e:   # tipicamente: 'No module named triton' (imagem sem triton)
+        print("[causal] gpt-oss kernel local FALHOU no import:", repr(e))
+        return False
 
     def _local_get_kernel(repo_id, *a, **k):
         if "triton_kernels" in str(repo_id):
@@ -255,6 +259,13 @@ class HFClient(LLMClient):
             # triton_kernels LOCAL ao transformers (contorna get_kernel/rede/metadata.json).
             _ok = _install_gpt_oss_kernel(os.environ.get("GPT_OSS_KERNEL_DIR"))
             print("[causal] gpt-oss kernel local:", "OK" if _ok else "NAO INSTALADO")
+            if not _ok:
+                # Sem kernel MXFP4 o transformers dequantiza p/ bf16 (~234GB) -> OOM
+                # apos minutos. Falha RAPIDO e claro; o factory cai pro NullLLMClient.
+                raise RuntimeError(
+                    "gpt-oss precisa do kernel MXFP4 (pacote triton_kernels + lib "
+                    "triton); ausente -> nao carregar (OOM em bf16). Confira "
+                    "GPT_OSS_KERNEL_DIR e se `import triton` funciona no container.")
             self._model = AutoModelForCausalLM.from_pretrained(
                 model_path, dtype="auto", device_map="cuda")
         else:

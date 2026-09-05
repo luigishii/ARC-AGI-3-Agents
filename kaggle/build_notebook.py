@@ -124,7 +124,9 @@ def build_notebook(sources):
     cell0 = (
         "!pip install --no-index --find-links %s arc-agi python-dotenv\n" % WHEELS
         + "!pip install --no-index --find-links %s kernels huggingface_hub || "
-        "echo 'kernels wheels ausentes -> gpt-oss cairia em bf16'\n" % KERNELS_WHEELS)
+        "echo 'kernels wheels ausentes -> gpt-oss cairia em bf16'\n" % KERNELS_WHEELS
+        + "!python -c 'import triton' 2>/dev/null || pip install --no-index --find-links %s "
+        "triton || echo 'triton ausente e sem wheel -> gpt-oss nao carrega'\n" % KERNELS_WHEELS)
     cell1 = (
         "import os, shutil, base64\n"
         "if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):\n"
