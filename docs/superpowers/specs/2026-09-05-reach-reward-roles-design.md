@@ -55,8 +55,9 @@ Algoritmo (numpy/stdlib, exception-safe → `None`):
 3. **Móvel**: se `avatar_obj` dado, é ele. Senão, os objetos pré-vitória SEM match na
    cena de vitória (sumiram da posição). Exige exatamente 1; 0 ou >1 → `None`.
 4. **Novos**: objetos da cena de vitória sem match na pré-vitória.
-5. **Pouso**: objetos pré-vitória **estáticos** (com match na vitória, ou que se fundiram)
-   que NÃO são o móvel e cuja bbox intersecta a bbox de algum objeto novo. Se `avatar_obj`
+5. **Pouso**: objetos pré-vitória que NÃO são o móvel e cuja bbox intersecta a bbox de
+   algum objeto novo. "Estático" aqui = tem match na vitória OU não tem match mas o
+   objeto novo que o cobre é maior que ele (fundiu-se com o móvel). Se `avatar_obj`
    dado e a lista vier vazia, usa o estático mais próximo (Manhattan `<= 2`) do match do
    avatar na cena de vitória. 0 candidatos → `None`; >1 → o de tamanho mais próximo de
    `mover_size`.
