@@ -711,6 +711,16 @@ class CausalObjectAgent(Agent):
             else:
                 # Key do replay nao existe neste nivel → aborta replay
                 self._replay_idx = len(self._win_seq)
+        # (2a) reward VALIDADA pela vitoria: o rprog (sobe a reward real) dirige ANTES
+        # das heuristicas 2phase — em jogo click-only onde todo botao tem efeito o
+        # 2phase disparava todo passo (vc33: 144/200 acoes em round-robin) e o rprog
+        # nunca decidia. Sem sinal (Δ medio > 0 com >=3 obs) cai no resto da pilha.
+        if (cand is None and self._winreward_on and self._win_reward is not None
+                and self._rprog_on and cands):
+            rk = self._rprog_decide(cands, uncapped=True)
+            if rk is not None:
+                cand = keymap.get(rk)
+                layer = layer or "rprog"
         # (2b) two-phase: se a ultima acao teve efeito, tenta a proxima fase.
         # Click→teclado (ka59, ar25, cn04, sp80), click→click (r11l, lf52),
         # OU teclado→teclado diferente (su15: grab→move→drop).
@@ -1156,11 +1166,12 @@ class CausalObjectAgent(Agent):
             cr[1] += 1
         self._combo_buf.append(self._last_key)
 
-    def _rprog_decide(self, cands):
+    def _rprog_decide(self, cands, uncapped: bool = False):
         """B′: escolhe a ação de maior Δ médio de reward real (>0). Min 3 observações
-        por key, cap de _rprog_max fires por episódio (evita monopolizar). Sem
+        por key, cap de _rprog_max fires por episódio (evita monopolizar) — salvo
+        `uncapped` (reward validada pela vitória: o rprog É o driver). Sem
         dados/positivo/cap estourado → None."""
-        if self._rprog_fires >= self._rprog_max:
+        if not uncapped and self._rprog_fires >= self._rprog_max:
             return None
         best_key, best_avg = None, 0.0
         for c in cands:

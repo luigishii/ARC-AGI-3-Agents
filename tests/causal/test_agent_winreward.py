@@ -77,3 +77,54 @@ def test_level_states_reset_on_levelup(monkeypatch):
     a = _agent(monkeypatch, CAUSAL_WINREWARD="1")
     _play_level(a)
     assert a._level_states == []
+
+
+# --- Task 3: rprog acima do 2phase quando a reward foi validada pela vitoria ---
+from collections import deque
+
+
+def _prime_rprog(a, key, deltas):
+    a._rprog[key] = deque(deltas, maxlen=10)
+
+
+def test_rprog_precedes_two_phase_with_win_reward(monkeypatch):
+    a = _agent(monkeypatch, CAUSAL_WINREWARD="1")
+    _play_level(a)                                        # define _win_reward
+    a._win_seq = []      # sem solution-replay (layout sintetico identico o manteria vivo)
+    a.choose_action([], _Frame([_layer(20)], levels=1))   # adota a reward win:
+    a.action_counter += 1
+    a._last_effect_kind = "structural"                    # o 2phase dispararia
+    a.choose_action([], _Frame([_layer(16)], levels=1))
+    key = a._pending_log["reasoning"]["key"]              # chave presente neste layout
+    _prime_rprog(a, key, [0.5, 0.6, 0.7])
+    a._last_effect_kind = "structural"
+    a.action_counter += 1
+    a.choose_action([], _Frame([_layer(16)], levels=1))   # mesmo layout -> mesma chave existe
+    assert a._pending_log["reasoning"]["layer"] == "rprog"
+    assert a._pending_log["reasoning"]["key"] == key
+
+
+def test_two_phase_still_first_without_flag(monkeypatch):
+    a = _agent(monkeypatch)                                # flag off
+    _play_level(a)
+    a.choose_action([], _Frame([_layer(20)], levels=1))
+    a.action_counter += 1
+    a._last_effect_kind = "structural"
+    a.choose_action([], _Frame([_layer(16)], levels=1))
+    key = a._pending_log["reasoning"]["key"]
+    _prime_rprog(a, key, [0.5, 0.6, 0.7])
+    a._last_effect_kind = "structural"
+    a.action_counter += 1
+    a.choose_action([], _Frame([_layer(16)], levels=1))
+    assert a._pending_log["reasoning"]["layer"] != "rprog"
+
+
+def test_rprog_uncapped_ignores_max(monkeypatch):
+    a = _agent(monkeypatch, CAUSAL_WINREWARD="1")
+    a._rprog_fires = a._rprog_max
+
+    class C:  # candidato minimo
+        key = "ACTION6@c5s0@1,1"
+    _prime_rprog(a, C.key, [0.5, 0.6, 0.7])
+    assert a._rprog_decide([C()]) is None
+    assert a._rprog_decide([C()], uncapped=True) == C.key
